@@ -101,7 +101,7 @@ export const generateImage = async (options: StabilityImageOptions): Promise<str
     );
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ message: 'Unknown error' }));
+      const errorData = await response.json().catch(() => ({ message: 'Unknown error' })) as { message?: string };
       console.error('[STABILITY] API error:', errorData);
       
       let errorMessage = 'Failed to generate image';
@@ -116,7 +116,7 @@ export const generateImage = async (options: StabilityImageOptions): Promise<str
       throw new Error(errorMessage);
     }
 
-    const data: StabilityImageResponse = await response.json();
+    const data = await response.json() as StabilityImageResponse;
     
     if (!data.artifacts || data.artifacts.length === 0) {
       throw new Error('No image generated');

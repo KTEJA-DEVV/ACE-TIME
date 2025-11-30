@@ -4,8 +4,31 @@ import { toast } from '../components/Toast';
 import { parseApiError, getUserFriendlyMessage } from '../utils/errorHandler';
 import { useAuthStore } from './auth';
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3001';
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+// Use relative URL in production (when served from backend), absolute URL in development
+const getSocketUrl = () => {
+  if (import.meta.env.VITE_SOCKET_URL) {
+    return import.meta.env.VITE_SOCKET_URL;
+  }
+  // In production, if served from same origin, use relative path
+  if (import.meta.env.PROD) {
+    return window.location.origin;
+  }
+  return 'http://localhost:3001';
+};
+
+const getApiUrl = () => {
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
+  // In production, if served from same origin, use relative path
+  if (import.meta.env.PROD) {
+    return window.location.origin;
+  }
+  return 'http://localhost:3001';
+};
+
+const SOCKET_URL = getSocketUrl();
+const API_URL = getApiUrl();
 
 interface TranscriptSegment {
   speaker: string;

@@ -673,12 +673,12 @@ export const useCallStore = create<CallState>((set, get) => ({
         if (event.candidate) {
           const { socket: currentSocket, participants } = get();
           if (currentSocket && currentSocket.connected) {
-            participants.forEach(p => {
+          participants.forEach(p => {
               currentSocket.emit('signal:candidate', {
-                targetId: p.socketId,
-                candidate: event.candidate,
-              });
+              targetId: p.socketId,
+              candidate: event.candidate,
             });
+          });
           }
         }
       };
@@ -687,32 +687,32 @@ export const useCallStore = create<CallState>((set, get) => ({
         console.log('[WEBRTC] Connection state:', pc.connectionState);
         if (pc.connectionState === 'connected') {
           set({ callStatus: 'active', isRecording: true });
-          // Start speech recognition for transcription when connected
+      // Start speech recognition for transcription when connected
           // But only if socket is also connected and user is not muted
-          setTimeout(() => {
+      setTimeout(() => {
             const { socket: currentSocket, isMuted } = get();
             if (currentSocket && currentSocket.connected && !isMuted) {
-              console.log('[SPEECH] Starting speech recognition after WebRTC connection');
-              get().startSpeechRecognition();
-              // Start call recording
-              get().startCallRecording();
-            } else {
+          console.log('[SPEECH] Starting speech recognition after WebRTC connection');
+          get().startSpeechRecognition();
+          // Start call recording
+          get().startCallRecording();
+        } else {
               console.warn('[SPEECH] ⚠️ Socket not connected or user is muted, waiting...');
               // Wait for socket connection and unmute
               const checkSocketInterval = setInterval(() => {
                 const { socket: checkSocket, isMuted: checkMuted } = get();
                 if (checkSocket && checkSocket.connected && !checkMuted) {
                   console.log('[SPEECH] Socket connected and unmuted, starting recognition now');
-                  get().startSpeechRecognition();
-                  get().startCallRecording();
+              get().startSpeechRecognition();
+              get().startCallRecording();
                   clearInterval(checkSocketInterval);
-                }
-              }, 500);
-              
-              // Stop checking after 10 seconds
-              setTimeout(() => clearInterval(checkSocketInterval), 10000);
             }
-          }, 1000); // Wait 1 second for stream to stabilize
+          }, 500);
+          
+          // Stop checking after 10 seconds
+              setTimeout(() => clearInterval(checkSocketInterval), 10000);
+        }
+      }, 1000); // Wait 1 second for stream to stabilize
         } else if (pc.connectionState === 'failed') {
           toast.error('Connection Failed', 'Unable to establish call connection');
           set({ error: 'Connection failed', callStatus: 'idle' });
@@ -760,7 +760,7 @@ export const useCallStore = create<CallState>((set, get) => ({
         if (!isMuted && !speechRecognition && callStatus !== 'ended') {
           console.log('[JOIN] ✅ Starting speech recognition after getting media stream');
           console.log('[JOIN] ⚠️ IMPORTANT: Both users must have speech recognition active to see each other\'s transcripts');
-          get().startSpeechRecognition();
+        get().startSpeechRecognition();
         } else if (isMuted) {
           console.log('[JOIN] ⚠️ User is muted, skipping speech recognition (will start when unmuted)');
           console.log('[JOIN] ⚠️ REMINDER: Unmute to enable transcription for this user');
@@ -1170,7 +1170,7 @@ export const useCallStore = create<CallState>((set, get) => ({
             if (!stillActive && stillActiveStatus === 'active' && stillStream && !stillMuted) {
               console.log('[SPEECH] ✅ Restarting speech recognition');
               try {
-                get().startSpeechRecognition();
+              get().startSpeechRecognition();
               } catch (error) {
                 console.error('[SPEECH] Error restarting recognition:', error);
                 // Try again after a longer delay
@@ -1189,16 +1189,16 @@ export const useCallStore = create<CallState>((set, get) => ({
         } else {
           console.log('[SPEECH] ⏹️ Not restarting - call status:', callStatus, 'has stream:', !!localStream);
           if (currentRec === recognition) {
-            set({ speechRecognition: null });
+          set({ speechRecognition: null });
           }
         }
       };
       
       // Start recognition
       try {
-        recognition.start();
-        set({ speechRecognition: recognition });
-        console.log('[SPEECH] ✅ Started Web Speech API recognition');
+      recognition.start();
+      set({ speechRecognition: recognition });
+      console.log('[SPEECH] ✅ Started Web Speech API recognition');
       } catch (error: any) {
         // If already started, that's okay
         if (error.message?.includes('already started') || error.name === 'InvalidStateError') {

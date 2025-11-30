@@ -6,7 +6,6 @@ import {
   Video,
   VideoOff,
   PhoneOff,
-  Share2,
   MessageSquare,
   Sparkles,
   Copy,
@@ -18,10 +17,7 @@ import {
   Send,
   Image as ImageIcon,
   Paperclip,
-  Bot,
   Clock,
-  Download,
-  Search,
   Smile,
 } from 'lucide-react';
 import { useAuthStore } from '../store/auth';
@@ -52,7 +48,6 @@ export default function CallRoom() {
     isMuted,
     isVideoOff,
     isRecording,
-    isHost,
     speechRecognition,
     callId,
     joinRoom,
@@ -60,7 +55,6 @@ export default function CallRoom() {
     endCall,
     toggleMute,
     toggleVideo,
-    requestNotes,
     initSocket,
   } = callStore;
 
@@ -534,7 +528,7 @@ export default function CallRoom() {
       );
 
       if (response.ok) {
-        const data = await response.json();
+        await response.json();
         toast.success('Private Chat', `Created private conversation with ${message.senderId.name}`);
       }
     } catch (error) {
@@ -1246,7 +1240,7 @@ export default function CallRoom() {
                           <div className="glass-card rounded-lg p-3 border border-green-500/20">
                             <h4 className="text-xs font-semibold text-green-300 mb-2 uppercase tracking-wide">Action Items</h4>
                             <ul className="space-y-1.5">
-                              {aiNotes.actionItems.map((item, idx) => (
+                              {aiNotes.actionItems.map((item: string, idx: number) => (
                                 <li key={idx} className="text-white text-sm flex items-start space-x-2">
                                   <span className="text-green-400 mt-1">•</span>
                                   <span>{item}</span>

@@ -519,7 +519,6 @@ export const useCallStore = create<CallState>((set, get) => ({
   },
 
   joinRoom: async (roomId: string, token: string) => {
-    const { socket } = get();
     set({ error: null, callStatus: 'connecting' });
     
     // Wait for socket to be connected (with timeout)
@@ -572,7 +571,7 @@ export const useCallStore = create<CallState>((set, get) => ({
     try {
       // Wait for socket connection before proceeding
       console.log('[JOIN] Waiting for socket connection...');
-      const connectedSocket = await waitForSocket();
+      await waitForSocket();
       console.log('[JOIN] ✅ Socket connected, proceeding with room join');
 
       const response = await fetch(`${API_URL}/api/rooms/${roomId}/join`, {
@@ -977,8 +976,6 @@ export const useCallStore = create<CallState>((set, get) => ({
       recognition.interimResults = true; // Show interim results
       recognition.lang = 'en-US'; // Language
       recognition.maxAlternatives = 1; // Only get best result
-      
-      let interimTranscript = '';
       
       recognition.onstart = () => {
         console.log('[SPEECH] ✅ Speech recognition started');

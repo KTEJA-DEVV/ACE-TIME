@@ -6,7 +6,6 @@ import {
   FileText,
   Users,
   Calendar,
-  ChevronRight,
   ArrowLeft,
   Sparkles,
   Search,

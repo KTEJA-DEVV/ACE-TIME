@@ -12,7 +12,6 @@ import {
   Wand2,
   Search,
   Sparkles,
-  Image as ImageIcon,
   X,
 } from 'lucide-react';
 import { useAuthStore } from '../store/auth';

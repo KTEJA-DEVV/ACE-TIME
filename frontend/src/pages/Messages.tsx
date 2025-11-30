@@ -42,6 +42,7 @@ interface Message {
   content: string;
   type: 'text' | 'ai_response' | 'image' | 'system';
   aiGenerated: boolean;
+  conversationId?: string;
   attachments?: Array<{ type: 'image' | 'file' | 'audio'; url: string; name: string }>;
   reactions?: Array<{ emoji: string; userId: string }>;
   createdAt: string;

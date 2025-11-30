@@ -38,16 +38,41 @@ const httpServer = createServer(app);
 // CORS configuration - support multiple origins
 const getCorsOrigin = (): string | string[] | boolean => {
   const clientUrl = process.env.CLIENT_URL;
-  if (!clientUrl) {
-    return '*'; // Allow all origins in development
+  
+  // If CLIENT_URL is not set or is invalid (like '/'), allow all origins
+  if (!clientUrl || clientUrl === '/' || clientUrl.trim() === '') {
+    console.warn('⚠️  CLIENT_URL is not set or invalid. Allowing all origins (CORS: *)');
+    return '*'; // Allow all origins
+  }
+  
+  // Validate URL format
+  try {
+    // Check if it's a valid URL
+    if (!clientUrl.startsWith('http://') && !clientUrl.startsWith('https://')) {
+      console.warn(`⚠️  CLIENT_URL "${clientUrl}" is not a valid URL. Allowing all origins (CORS: *)`);
+      return '*';
+    }
+    
+    // Test URL parsing
+    new URL(clientUrl);
+  } catch (e) {
+    console.warn(`⚠️  CLIENT_URL "${clientUrl}" is invalid. Allowing all origins (CORS: *)`);
+    return '*';
   }
   
   // Support multiple origins separated by comma
   if (clientUrl.includes(',')) {
-    return clientUrl.split(',').map(url => url.trim());
+    return clientUrl.split(',').map(url => url.trim()).filter(url => {
+      // Validate each URL
+      try {
+        return url.startsWith('http://') || url.startsWith('https://');
+      } catch {
+        return false;
+      }
+    });
   }
   
-  return clientUrl;
+  return clientUrl.trim();
 };
 
 const corsOrigin = getCorsOrigin();
@@ -74,8 +99,8 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Root route - API info
-app.get('/', (req, res) => {
+// API info route (only if frontend is not built)
+app.get('/api/info', (req, res) => {
   res.json({ 
     name: 'AceTime API',
     version: '1.0.0',
@@ -112,7 +137,32 @@ app.use('/api/messages', messageRoutes);
 app.use('/api/images', imageRoutes);
 app.use('/api/network', networkRoutes);
 
-// 404 handler for unknown routes
+// Serve static files from frontend build (in production)
+const frontendDistPath = path.resolve(__dirname, '../../frontend/dist');
+const fs = require('fs');
+
+if (fs.existsSync(frontendDistPath)) {
+  // Serve static assets (CSS, JS, images, etc.)
+  app.use(express.static(frontendDistPath));
+  
+  // Serve index.html for all non-API routes (SPA routing)
+  // This must be after API routes but before 404 handler
+  app.get('*', (req, res, next) => {
+    // Don't serve index.html for API routes or socket.io
+    if (req.path.startsWith('/api') || req.path.startsWith('/socket.io') || req.path.startsWith('/health')) {
+      return next(); // Pass to 404 handler
+    }
+    res.sendFile(path.join(frontendDistPath, 'index.html'), (err) => {
+      if (err) next(err);
+    });
+  });
+  
+  console.log('✅ Frontend static files enabled');
+} else {
+  console.log('⚠️  Frontend dist not found - serving API only');
+}
+
+// 404 handler for unknown routes (must be last)
 app.use(notFoundHandler);
 
 // Global error handler

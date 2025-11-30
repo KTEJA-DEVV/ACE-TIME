@@ -30,14 +30,33 @@ console.log('   PORT:', process.env.PORT || '3001 (default)');
 console.log('   MONGODB_URI:', process.env.MONGODB_URI ? '✓ Set' : '✗ Not set (using localhost)');
 console.log('   OPENAI_API_KEY:', process.env.OPENAI_API_KEY ? '✓ Set (' + process.env.OPENAI_API_KEY.substring(0, 10) + '...)' : '✗ Not set');
 console.log('   JWT_SECRET:', process.env.JWT_SECRET ? '✓ Set (' + process.env.JWT_SECRET.substring(0, 10) + '...)' : '✗ Not set (using default)');
+console.log('   CLIENT_URL:', process.env.CLIENT_URL || 'Not set (using * - allowing all origins)');
 
 const app = express();
 const httpServer = createServer(app);
 
+// CORS configuration - support multiple origins
+const getCorsOrigin = (): string | string[] | boolean => {
+  const clientUrl = process.env.CLIENT_URL;
+  if (!clientUrl) {
+    return '*'; // Allow all origins in development
+  }
+  
+  // Support multiple origins separated by comma
+  if (clientUrl.includes(',')) {
+    return clientUrl.split(',').map(url => url.trim());
+  }
+  
+  return clientUrl;
+};
+
+const corsOrigin = getCorsOrigin();
+console.log('🌐 CORS origin:', Array.isArray(corsOrigin) ? corsOrigin.join(', ') : corsOrigin);
+
 // Socket.IO setup
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.CLIENT_URL || '*',
+    origin: corsOrigin,
     methods: ['GET', 'POST'],
     credentials: true,
   },
@@ -49,7 +68,7 @@ console.log('📡 Socket.IO server configured');
 
 // Middleware
 app.use(cors({
-  origin: process.env.CLIENT_URL || '*',
+  origin: corsOrigin,
   credentials: true,
 }));
 app.use(express.json({ limit: '50mb' }));

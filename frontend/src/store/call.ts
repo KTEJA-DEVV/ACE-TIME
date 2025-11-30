@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { io, Socket } from 'socket.io-client';
 import { toast } from '../components/Toast';
 import { parseApiError, getUserFriendlyMessage } from '../utils/errorHandler';
+import { useAuthStore } from './auth';
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3001';
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
@@ -150,12 +151,12 @@ export const useCallStore = create<CallState>((set, get) => ({
       toast.success('Connected', 'Socket connection established');
     });
 
-    socket.on('connect_error', (error) => {
+    socket.on('connect_error', (error: any) => {
       console.error('[SOCKET] ❌ Connection error:', error);
       console.error('[SOCKET] Error details:', {
         message: error.message,
-        type: error.type,
-        description: error.description,
+        type: error.type || 'unknown',
+        description: error.description || 'No description',
       });
       const message = `Unable to connect to call server: ${error.message}`;
       set({ error: message });
@@ -203,7 +204,8 @@ export const useCallStore = create<CallState>((set, get) => ({
 
     socket.on('room:joined', (data) => {
       // Filter out current user from participants list and remove duplicates
-      const currentUserId = get().user?.id || get().user?._id;
+      const authUser = useAuthStore.getState().user;
+      const currentUserId = authUser?._id;
       const currentSocketId = socket.id;
       
       const seen = new Set<string>();
@@ -338,16 +340,16 @@ export const useCallStore = create<CallState>((set, get) => ({
       } else {
         console.warn('[CALL] ⚠️ Socket not connected, cannot start transcription');
         // Wait for socket and retry
-        const checkSocket = setInterval(() => {
+        const checkSocketInterval = setInterval(() => {
           const { socket: checkSocket } = get();
           if (checkSocket && checkSocket.connected) {
             console.log('[CALL] Socket connected, starting recognition');
             get().startSpeechRecognition();
             get().startCallRecording();
-            clearInterval(checkSocket);
+            clearInterval(checkSocketInterval);
           }
         }, 500);
-        setTimeout(() => clearInterval(checkSocket), 10000);
+        setTimeout(() => clearInterval(checkSocketInterval), 10000);
       }
     });
 
@@ -372,13 +374,14 @@ export const useCallStore = create<CallState>((set, get) => ({
         currentTime: Date.now(),
         timeDiff: Date.now() - segment.timestamp,
       });
-      console.log('[TRANSCRIPT] Current user ID:', get().user?.id || get().user?._id);
+      const authUser = useAuthStore.getState().user;
+      const currentUserId = authUser?._id;
+      console.log('[TRANSCRIPT] Current user ID:', currentUserId);
       console.log('[TRANSCRIPT] Current transcript length:', get().transcript.length);
       console.log('[TRANSCRIPT] Socket connection state:', socket.connected ? 'connected' : 'disconnected');
       
       // Get current user info to check if this is from current user
-      const { user, userName: currentUserName } = get();
-      const currentUserId = user?.id || user?._id;
+      const { userName: currentUserName } = get();
       
       // Normalize speaker name - keep original speaker name from server
       // Server already identifies the speaker correctly, so we should display it as-is
@@ -696,18 +699,18 @@ export const useCallStore = create<CallState>((set, get) => ({
             } else {
               console.warn('[SPEECH] ⚠️ Socket not connected or user is muted, waiting...');
               // Wait for socket connection and unmute
-              const checkSocket = setInterval(() => {
+              const checkSocketInterval = setInterval(() => {
                 const { socket: checkSocket, isMuted: checkMuted } = get();
                 if (checkSocket && checkSocket.connected && !checkMuted) {
                   console.log('[SPEECH] Socket connected and unmuted, starting recognition now');
                   get().startSpeechRecognition();
                   get().startCallRecording();
-                  clearInterval(checkSocket);
+                  clearInterval(checkSocketInterval);
                 }
               }, 500);
               
               // Stop checking after 10 seconds
-              setTimeout(() => clearInterval(checkSocket), 10000);
+              setTimeout(() => clearInterval(checkSocketInterval), 10000);
             }
           }, 1000); // Wait 1 second for stream to stabilize
         } else if (pc.connectionState === 'failed') {
@@ -1027,7 +1030,8 @@ export const useCallStore = create<CallState>((set, get) => ({
         // Send final transcript to server and show locally as fallback
         if (finalTranscript.trim()) {
           console.log('[SPEECH] ✅ Final transcript:', finalTranscript.trim());
-          const { socket: currentSocket, roomId, isMuted, userName: currentUserName, user } = get();
+          const { socket: currentSocket, roomId, isMuted, userName: currentUserName } = get();
+          const authUser = useAuthStore.getState().user;
           
           // Don't send if muted
           if (isMuted) {
@@ -1038,7 +1042,7 @@ export const useCallStore = create<CallState>((set, get) => ({
           // Create segment for local display (fallback if server doesn't respond)
           const localSegment: TranscriptSegment = {
             speaker: currentUserName || 'You',
-            speakerId: user?.id || user?._id,
+            speakerId: authUser?._id,
             text: finalTranscript.trim(),
             timestamp: Date.now(),
           };

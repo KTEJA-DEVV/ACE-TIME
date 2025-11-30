@@ -15,8 +15,10 @@ import {
   Paperclip,
   Smile,
   X,
+  Check,
 } from 'lucide-react';
 import { useAuthStore } from '../store/auth';
+import { toast } from '../components/Toast';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3001';
@@ -57,6 +59,10 @@ export default function Messages() {
   const [showReactionPicker, setShowReactionPicker] = useState<string | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [showCreateGroup, setShowCreateGroup] = useState(false);
+  const [groupName, setGroupName] = useState('');
+  const [selectedParticipants, setSelectedParticipants] = useState<string[]>([]);
+  const [isLongPressing, setIsLongPressing] = useState<string | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const currentConversationIdRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -325,13 +331,18 @@ export default function Messages() {
 
       if (response.ok) {
         const data = await response.json();
+        toast.success('Private Chat Created', `Started a private conversation with ${message.senderId.name}`);
         // Navigate to the new private conversation
         setSelectedConversation(data.conversation);
         fetchMessages(data.conversation._id);
         fetchConversations(); // Refresh list
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        toast.error('Error', errorData.error || 'Failed to create private chat');
       }
     } catch (error) {
       console.error('Create breakout error:', error);
+      toast.error('Error', 'Failed to create private chat. Please try again.');
     }
   };
 
@@ -339,8 +350,12 @@ export default function Messages() {
     if (message.senderId._id === user?._id) return;
     if (selectedConversation?.type !== 'group') return;
 
+    // Show visual feedback
+    setIsLongPressing(message._id);
+
     const timer = setTimeout(() => {
       handleMessageLongPress(message);
+      setIsLongPressing(null);
     }, 500); // 500ms long press
     setLongPressTimer(timer);
   };
@@ -350,6 +365,7 @@ export default function Messages() {
       clearTimeout(longPressTimer);
       setLongPressTimer(null);
     }
+    setIsLongPressing(null);
   };
 
   const handleReaction = async (messageId: string, emoji: string) => {
@@ -426,6 +442,70 @@ export default function Messages() {
     return others.map(p => p.name).join(', ') || 'New Conversation';
   };
 
+  // Get all unique participants from existing conversations for group creation
+  const getAllParticipants = (): Array<{ _id: string; name: string; avatar?: string }> => {
+    const participantMap = new Map<string, { _id: string; name: string; avatar?: string }>();
+    
+    conversations.forEach(conv => {
+      conv.participants.forEach(p => {
+        if (p._id !== user?._id && !participantMap.has(p._id)) {
+          participantMap.set(p._id, p);
+        }
+      });
+    });
+    
+    return Array.from(participantMap.values());
+  };
+
+  const createGroup = async () => {
+    if (!accessToken || selectedParticipants.length === 0) return;
+    if (!groupName.trim()) {
+      toast.error('Error', 'Please enter a group name');
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/api/messages/conversations`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          participantIds: selectedParticipants,
+          type: 'group',
+          name: groupName.trim(),
+          aiEnabled: true,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        toast.success('Group Created', `Created group "${groupName}"`);
+        setShowCreateGroup(false);
+        setGroupName('');
+        setSelectedParticipants([]);
+        fetchConversations();
+        setSelectedConversation(data.conversation);
+        fetchMessages(data.conversation._id);
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        toast.error('Error', errorData.error || 'Failed to create group');
+      }
+    } catch (error) {
+      console.error('Create group error:', error);
+      toast.error('Error', 'Failed to create group. Please try again.');
+    }
+  };
+
+  const toggleParticipant = (participantId: string) => {
+    setSelectedParticipants(prev => 
+      prev.includes(participantId)
+        ? prev.filter(id => id !== participantId)
+        : [...prev, participantId]
+    );
+  };
+
   return (
     <div className="min-h-screen bg-dark-950 bg-animated flex">
       {/* Sidebar - Conversations */}
@@ -439,7 +519,11 @@ export default function Messages() {
               <MessageSquare className="w-5 h-5 text-primary-400" />
               <h1 className="text-xl font-semibold text-white">Messages</h1>
             </div>
-            <button className="w-8 h-8 bg-primary-500/20 hover:bg-primary-500/30 rounded-lg flex items-center justify-center text-primary-400 hover:text-primary-300 transition">
+            <button 
+              onClick={() => setShowCreateGroup(true)}
+              className="w-8 h-8 bg-primary-500/20 hover:bg-primary-500/30 rounded-lg flex items-center justify-center text-primary-400 hover:text-primary-300 transition"
+              title="Create group"
+            >
               <Plus className="w-4 h-4" />
             </button>
           </div>
@@ -517,18 +601,30 @@ export default function Messages() {
             <div className="p-4 border-b border-dark-800 flex items-center justify-between">
               <div className="flex items-center space-x-3">
                 <div className="w-10 h-10 bg-primary-500/20 rounded-full flex items-center justify-center">
-                  <MessageSquare className="w-5 h-5 text-primary-400" />
+                  {selectedConversation.type === 'group' ? (
+                    <Users className="w-5 h-5 text-blue-400" />
+                  ) : (
+                    <MessageSquare className="w-5 h-5 text-primary-400" />
+                  )}
                 </div>
                 <div>
                   <h2 className="text-white font-medium">
                     {getConversationName(selectedConversation)}
                   </h2>
-                  {selectedConversation.aiEnabled && (
-                    <span className="text-purple-400 text-xs flex items-center">
-                      <Sparkles className="w-3 h-3 mr-1" />
-                      AI-assisted • Type @ai to ask
-                    </span>
-                  )}
+                  <div className="flex items-center space-x-3 mt-1">
+                    {selectedConversation.aiEnabled && (
+                      <span className="text-purple-400 text-xs flex items-center">
+                        <Sparkles className="w-3 h-3 mr-1" />
+                        AI-assisted • Type @ai to ask
+                      </span>
+                    )}
+                    {selectedConversation.type === 'group' && (
+                      <span className="text-blue-400 text-xs flex items-center">
+                        <Users className="w-3 h-3 mr-1" />
+                        Press & hold messages to reply privately
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -541,7 +637,7 @@ export default function Messages() {
                 return (
                 <div
                   key={messageKey}
-                  className={`flex ${
+                  className={`flex relative ${
                     msg.senderId._id === user?._id ? 'justify-end' : 'justify-start'
                   }`}
                   onMouseDown={() => handleMouseDown(msg)}
@@ -555,12 +651,19 @@ export default function Messages() {
                   onTouchCancel={handleMouseUp}
                   style={{ cursor: msg.senderId._id !== user?._id && selectedConversation?.type === 'group' ? 'pointer' : 'default' }}
                 >
+                  {isLongPressing === msg._id && msg.senderId._id !== user?._id && selectedConversation?.type === 'group' && (
+                    <div className={`absolute ${msg.senderId._id === user?._id ? 'right-0' : 'left-0'} -top-10 bg-primary-500 text-white text-xs px-3 py-1.5 rounded-lg whitespace-nowrap animate-fade-in z-10 shadow-lg`}>
+                      Release to create private chat
+                    </div>
+                  )}
                   <div
-                    className={`max-w-[70%] rounded-2xl px-4 py-2 transition-all ${
+                    className={`max-w-[70%] rounded-2xl px-4 py-2 transition-all relative ${
                       msg.aiGenerated
                         ? 'bg-purple-500/20 border border-purple-500/30'
                         : msg.senderId._id === user?._id
                         ? 'bg-primary-500'
+                        : isLongPressing === msg._id
+                        ? 'bg-primary-500/30 border-2 border-primary-400 scale-95'
                         : 'bg-dark-800 hover:bg-dark-700'
                     } ${msg.senderId._id !== user?._id && selectedConversation?.type === 'group' ? 'active:scale-95' : ''}`}
                     title={msg.senderId._id !== user?._id && selectedConversation?.type === 'group' ? 'Press and hold to reply privately' : ''}
@@ -770,6 +873,106 @@ export default function Messages() {
           </div>
         )}
       </div>
+
+      {/* Create Group Modal */}
+      {showCreateGroup && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-dark-900 rounded-2xl p-6 w-full max-w-md border border-dark-800 glass-card">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-semibold text-white flex items-center space-x-2">
+                <Users className="w-5 h-5 text-primary-400" />
+                <span>Create Group</span>
+              </h2>
+              <button
+                onClick={() => {
+                  setShowCreateGroup(false);
+                  setGroupName('');
+                  setSelectedParticipants([]);
+                }}
+                className="text-dark-400 hover:text-white transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm text-dark-300 mb-2 block">Group Name</label>
+                <input
+                  type="text"
+                  value={groupName}
+                  onChange={(e) => setGroupName(e.target.value)}
+                  placeholder="Enter group name..."
+                  className="w-full px-4 py-2 bg-dark-800 border border-dark-700 rounded-lg text-white placeholder-dark-500 focus:outline-none focus:border-primary-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-sm text-dark-300 mb-2 block">Select Participants</label>
+                <div className="max-h-60 overflow-y-auto space-y-2 bg-dark-800 rounded-lg p-3 border border-dark-700">
+                  {getAllParticipants().length === 0 ? (
+                    <p className="text-dark-500 text-sm text-center py-4">
+                      No contacts available. Start conversations to add participants.
+                    </p>
+                  ) : (
+                    getAllParticipants().map((participant) => (
+                      <button
+                        key={participant._id}
+                        onClick={() => toggleParticipant(participant._id)}
+                        className={`w-full flex items-center space-x-3 p-2 rounded-lg transition ${
+                          selectedParticipants.includes(participant._id)
+                            ? 'bg-primary-500/20 border border-primary-500/50'
+                            : 'bg-dark-700 hover:bg-dark-600'
+                        }`}
+                      >
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                          selectedParticipants.includes(participant._id)
+                            ? 'bg-primary-500'
+                            : 'bg-dark-600'
+                        }`}>
+                          {selectedParticipants.includes(participant._id) ? (
+                            <Check className="w-4 h-4 text-white" />
+                          ) : (
+                            <span className="text-xs text-dark-300">
+                              {participant.name.charAt(0).toUpperCase()}
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-white text-sm flex-1 text-left">{participant.name}</span>
+                      </button>
+                    ))
+                  )}
+                </div>
+                {selectedParticipants.length > 0 && (
+                  <p className="text-xs text-primary-400 mt-2">
+                    {selectedParticipants.length} participant{selectedParticipants.length > 1 ? 's' : ''} selected
+                  </p>
+                )}
+              </div>
+
+              <div className="flex items-center space-x-3 pt-2">
+                <button
+                  onClick={() => {
+                    setShowCreateGroup(false);
+                    setGroupName('');
+                    setSelectedParticipants([]);
+                  }}
+                  className="flex-1 px-4 py-2 bg-dark-800 hover:bg-dark-700 rounded-lg text-white transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={createGroup}
+                  disabled={!groupName.trim() || selectedParticipants.length === 0}
+                  className="flex-1 px-4 py-2 bg-primary-500 hover:bg-primary-600 rounded-lg text-white transition disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Create Group
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

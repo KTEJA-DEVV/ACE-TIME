@@ -643,8 +643,26 @@ export const useCallStore = create<CallState>((set, get) => ({
       });
 
       pc.ontrack = (event) => {
+        console.log('[WEBRTC] ontrack event received:', {
+          streams: event.streams?.length || 0,
+          track: event.track?.kind,
+          trackId: event.track?.id,
+          trackEnabled: event.track?.enabled,
+        });
+        
         if (event.streams && event.streams[0]) {
-          set({ remoteStream: event.streams[0] });
+          const stream = event.streams[0];
+          console.log('[WEBRTC] ✅ Setting remote stream:', {
+            id: stream.id,
+            active: stream.active,
+            tracks: stream.getTracks().map(t => ({ kind: t.kind, enabled: t.enabled, id: t.id })),
+          });
+          set({ remoteStream: stream });
+        } else if (event.track) {
+          // Fallback: create a stream from the track if streams array is empty
+          console.log('[WEBRTC] ⚠️ No streams array, creating stream from track');
+          const stream = new MediaStream([event.track]);
+          set({ remoteStream: stream });
         }
       };
 

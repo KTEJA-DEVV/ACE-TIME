@@ -138,13 +138,25 @@ export default function CallRoom() {
   // Set up video streams
   useEffect(() => {
     if (localVideoRef.current && localStream) {
+      console.log('[VIDEO] Setting local video stream');
       localVideoRef.current.srcObject = localStream;
+      localVideoRef.current.play().catch((error) => {
+        console.error('[VIDEO] Error playing local video:', error);
+      });
+    } else if (localVideoRef.current && !localStream) {
+      localVideoRef.current.srcObject = null;
     }
   }, [localStream]);
 
   useEffect(() => {
     if (remoteVideoRef.current && remoteStream) {
+      console.log('[VIDEO] Setting remote video stream');
       remoteVideoRef.current.srcObject = remoteStream;
+      remoteVideoRef.current.play().catch((error) => {
+        console.error('[VIDEO] Error playing remote video:', error);
+      });
+    } else if (remoteVideoRef.current && !remoteStream) {
+      remoteVideoRef.current.srcObject = null;
     }
   }, [remoteStream]);
 
@@ -686,7 +698,18 @@ export default function CallRoom() {
                 ref={remoteVideoRef}
                 autoPlay
                 playsInline
+                muted={false}
                 className="w-full h-full object-cover"
+                onLoadedMetadata={() => {
+                  console.log('[VIDEO] Remote video metadata loaded');
+                  if (remoteVideoRef.current) {
+                    remoteVideoRef.current.play().catch((error) => {
+                      console.error('[VIDEO] Error playing remote video after metadata:', error);
+                    });
+                  }
+                }}
+                onPlay={() => console.log('[VIDEO] Remote video playing')}
+                onError={(e) => console.error('[VIDEO] Remote video error:', e)}
               />
             ) : (
               <div className="w-full h-full flex items-center justify-center">
@@ -714,6 +737,16 @@ export default function CallRoom() {
                   muted
                   className="w-full h-full object-cover"
                   style={{ transform: 'scaleX(-1)' }}
+                  onLoadedMetadata={() => {
+                    console.log('[VIDEO] Local video metadata loaded');
+                    if (localVideoRef.current) {
+                      localVideoRef.current.play().catch((error) => {
+                        console.error('[VIDEO] Error playing local video after metadata:', error);
+                      });
+                    }
+                  }}
+                  onPlay={() => console.log('[VIDEO] Local video playing')}
+                  onError={(e) => console.error('[VIDEO] Local video error:', e)}
                 />
               </div>
             )}
@@ -1127,7 +1160,7 @@ export default function CallRoom() {
                     )}
                 {/* Top Half: Transcript */}
                 <div 
-                  className={`${isVideoOff ? 'h-1/2' : 'flex-1'} overflow-y-auto p-4 space-y-2 ${isVideoOff ? 'border-b border-dark-800/50' : ''}`}
+                  className="h-1/2 overflow-y-auto p-4 space-y-2 border-b border-dark-800/50"
                   data-transcript-container
                 >
                   {transcript.length === 0 ? (
@@ -1192,9 +1225,8 @@ export default function CallRoom() {
                   )}
                 </div>
                 
-                {/* Bottom Half: AI Notes (especially for audio calls) */}
-                {isVideoOff && (
-                  <div className="h-1/2 overflow-y-auto p-4 border-t border-dark-800/50">
+                {/* Bottom Half: AI Notes */}
+                <div className="h-1/2 overflow-y-auto p-4 border-t border-dark-800/50">
                     <div className="flex items-center space-x-2 mb-3">
                       <Sparkles className="w-4 h-4 text-purple-400" />
                       <span className="text-white font-semibold text-sm">AI Meeting Notes</span>
@@ -1246,7 +1278,6 @@ export default function CallRoom() {
                       </div>
                     )}
                   </div>
-                )}
               </div>
             )}
           </div>

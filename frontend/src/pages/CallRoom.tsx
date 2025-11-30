@@ -1240,10 +1240,10 @@ export default function CallRoom() {
                           <div className="glass-card rounded-lg p-3 border border-green-500/20">
                             <h4 className="text-xs font-semibold text-green-300 mb-2 uppercase tracking-wide">Action Items</h4>
                             <ul className="space-y-1.5">
-                              {aiNotes.actionItems.map((item: string, idx: number) => (
+                              {aiNotes.actionItems.map((item, idx) => (
                                 <li key={idx} className="text-white text-sm flex items-start space-x-2">
                                   <span className="text-green-400 mt-1">•</span>
-                                  <span>{item}</span>
+                                  <span>{item.text}{item.assignee && ` (${item.assignee})`}</span>
                                 </li>
                               ))}
                             </ul>

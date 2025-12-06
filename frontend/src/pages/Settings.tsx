@@ -1,11 +1,11 @@
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Bell, Shield, Volume2, Moon, Globe, LogOut } from 'lucide-react';
+import { ArrowLeft, Bell, Shield, Volume2, Moon, LogOut } from 'lucide-react';
 import { useAuthStore } from '../store/auth';
 import { toast } from '../components/Toast';
 
 export default function Settings() {
   const navigate = useNavigate();
-  const { user, logout } = useAuthStore();
+  const { logout } = useAuthStore();
 
   const handleLogout = () => {
     logout();

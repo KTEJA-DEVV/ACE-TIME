@@ -38,14 +38,12 @@ export default function PrivateMessages() {
   const [conversations, setConversations] = useState<PrivateConversation[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
 
   // Check URL params for conversation ID
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const convId = params.get('conversation');
     if (convId) {
-      setSelectedConversationId(convId);
       // Navigate to dedicated Friend Chat page (WhatsApp-style)
       navigate(`/friends/chat/${convId}`);
     }

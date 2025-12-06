@@ -75,6 +75,7 @@ interface CallState {
   isHost: boolean;
   callStatus: 'idle' | 'connecting' | 'waiting' | 'active' | 'ended';
   participants: Participant[];
+  callStartTime: number | null; // Timestamp when call became active (for continuous duration)
   
   transcript: TranscriptSegment[];
   interimTranscript: string; // For showing live interim results
@@ -83,6 +84,7 @@ interface CallState {
   isMuted: boolean;
   isVideoOff: boolean;
   isRecording: boolean;
+  isMinimized: boolean; // For floating PiP overlay when navigating away
   
   error: string | null;
   
@@ -101,6 +103,8 @@ interface CallState {
   startCallRecording: () => void;
   stopCallRecording: () => Promise<void>;
   clearCall: () => void;
+  minimizeCall: () => void;
+  maximizeCall: () => void;
 }
 
 const ICE_SERVERS = {
@@ -124,6 +128,7 @@ export const useCallStore = create<CallState>((set, get) => ({
   isHost: false,
   callStatus: 'idle',
   participants: [],
+  callStartTime: null,
   
   transcript: [],
   interimTranscript: '',
@@ -132,6 +137,7 @@ export const useCallStore = create<CallState>((set, get) => ({
   isMuted: false,
   isVideoOff: false,
   isRecording: false,
+  isMinimized: false,
   
   error: null,
 
@@ -345,10 +351,12 @@ export const useCallStore = create<CallState>((set, get) => ({
 
     socket.on('call:started', (data) => {
       console.log('[CALL] Call started event received:', data);
+      const startTime = Date.now();
       set({
         callStatus: 'active',
         callId: data.callId,
         isRecording: true,
+        callStartTime: startTime, // Store start time for continuous duration
       });
       // Start speech recognition for transcription
       // Ensure socket is connected first
@@ -708,7 +716,14 @@ export const useCallStore = create<CallState>((set, get) => ({
       pc.onconnectionstatechange = () => {
         console.log('[WEBRTC] Connection state:', pc.connectionState);
         if (pc.connectionState === 'connected') {
-          set({ callStatus: 'active', isRecording: true });
+          const { callStartTime } = get();
+          // Only set start time if not already set (preserve existing start time)
+          const startTime = callStartTime || Date.now();
+          set({ 
+            callStatus: 'active', 
+            isRecording: true,
+            callStartTime: startTime, // Store start time for continuous duration
+          });
       // Start speech recognition for transcription when connected
           // But only if socket is also connected and user is not muted
       setTimeout(() => {
@@ -893,6 +908,8 @@ export const useCallStore = create<CallState>((set, get) => ({
     set({ 
       callStatus: 'ended', 
       isRecording: false,
+      isMinimized: false,
+      callStartTime: null, // Clear start time when call ends
       localStream: null,
       remoteStream: null,
       peerConnection: null,
@@ -1443,14 +1460,27 @@ export const useCallStore = create<CallState>((set, get) => ({
       isHost: false,
       callStatus: 'idle',
       participants: [],
+      callStartTime: null,
       transcript: [],
       interimTranscript: '',
       aiNotes: null,
       isMuted: false,
       isVideoOff: false,
       isRecording: false,
+      isMinimized: false,
       error: null,
     });
+  },
+
+  minimizeCall: () => {
+    const { callStatus } = get();
+    if (callStatus === 'active' || callStatus === 'waiting') {
+      set({ isMinimized: true });
+    }
+  },
+
+  maximizeCall: () => {
+    set({ isMinimized: false });
   },
 }));
 

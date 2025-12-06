@@ -14,6 +14,10 @@ import {
   Wand2,
   Users,
   ChevronRight,
+  UserPlus,
+  Menu,
+  User,
+  Settings,
 } from 'lucide-react';
 import { useAuthStore } from '../store/auth';
 import { useCallStore } from '../store/call';
@@ -32,6 +36,64 @@ export default function Home() {
   const [joinCode, setJoinCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [friends, setFriends] = useState<any[]>([]);
+  const [friendsLoading, setFriendsLoading] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+
+  // Close menus when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest('.profile-menu-container') && !target.closest('.profile-button')) {
+        setProfileMenuOpen(false);
+      }
+      if (!target.closest('.mobile-menu-container') && !target.closest('.mobile-menu-button')) {
+        setMobileMenuOpen(false);
+      }
+    };
+
+    if (mobileMenuOpen || profileMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [mobileMenuOpen, profileMenuOpen]);
+
+  const getApiUrl = () => {
+    if (import.meta.env.VITE_API_URL) {
+      return import.meta.env.VITE_API_URL;
+    }
+    if (import.meta.env.PROD) {
+      return window.location.origin;
+    }
+    return 'http://localhost:3001';
+  };
+
+  // Fetch friends on mount
+  useEffect(() => {
+    if (accessToken) {
+      fetchFriends();
+    }
+  }, [accessToken]);
+
+  const fetchFriends = async () => {
+    if (!accessToken) return;
+    setFriendsLoading(true);
+    try {
+      const API_URL = getApiUrl();
+      const response = await fetch(`${API_URL}/api/network/connections?status=accepted`, {
+        headers: { 'Authorization': `Bearer ${accessToken}` },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setFriends(data.connections || []);
+      }
+    } catch (error) {
+      console.error('Fetch friends error:', error);
+    } finally {
+      setFriendsLoading(false);
+    }
+  };
 
   const handleStartCall = async () => {
     if (!user) return;
@@ -109,9 +171,10 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-dark-950 bg-animated">
       {/* Header */}
-      <header className="border-b border-dark-800">
+      <header className="sticky top-0 z-50 border-b border-dark-800 bg-dark-950/95 backdrop-blur-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
+            {/* Logo */}
             <div className="flex items-center space-x-2">
               <div className="w-10 h-10 bg-gradient-to-br from-primary-500 to-purple-500 rounded-xl flex items-center justify-center">
                 <Video className="w-5 h-5 text-white" />
@@ -119,42 +182,134 @@ export default function Home() {
               <span className="text-xl font-bold text-white">AceTime</span>
             </div>
 
-            <div className="flex items-center space-x-4">
+            {/* Desktop Navigation */}
+            <div className="hidden md:flex items-center space-x-4">
               <Link
                 to="/messages"
-                className="flex items-center space-x-2 text-dark-400 hover:text-white transition px-3 py-2"
+                className="flex items-center space-x-2 text-dark-400 hover:text-white transition px-3 py-2 rounded-lg hover:bg-dark-800/50"
               >
                 <MessageSquare className="w-5 h-5" />
                 <span>Messages</span>
               </Link>
               <Link
                 to="/network"
-                className="flex items-center space-x-2 text-dark-400 hover:text-white transition px-3 py-2"
+                className="flex items-center space-x-2 text-dark-400 hover:text-white transition px-3 py-2 rounded-lg hover:bg-dark-800/50"
               >
                 <Target className="w-5 h-5" />
                 <span>Network</span>
               </Link>
               <Link
                 to="/history"
-                className="flex items-center space-x-2 text-dark-400 hover:text-white transition px-3 py-2"
+                className="flex items-center space-x-2 text-dark-400 hover:text-white transition px-3 py-2 rounded-lg hover:bg-dark-800/50"
               >
                 <Clock className="w-5 h-5" />
                 <span>History</span>
               </Link>
-              <button
-                onClick={handleLogout}
-                className="flex items-center space-x-2 text-dark-400 hover:text-white transition px-3 py-2"
-              >
-                <LogOut className="w-5 h-5" />
-                <span>Logout</span>
-              </button>
-              <div className="w-10 h-10 bg-primary-500 rounded-full flex items-center justify-center">
-                <span className="text-white font-semibold">
-                  {user?.name?.charAt(0).toUpperCase()}
-                </span>
+            </div>
+
+            {/* Right side: Profile & Mobile Menu */}
+            <div className="flex items-center space-x-2">
+              {/* Profile Menu */}
+              <div className="relative profile-menu-container">
+                <button
+                  onClick={() => setProfileMenuOpen(!profileMenuOpen)}
+                  className="profile-button w-10 h-10 bg-primary-500 rounded-full flex items-center justify-center hover:bg-primary-600 transition focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                >
+                  <span className="text-white font-semibold">
+                    {user?.name?.charAt(0).toUpperCase()}
+                  </span>
+                </button>
+
+                {/* Profile Dropdown */}
+                {profileMenuOpen && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-40"
+                      onClick={() => setProfileMenuOpen(false)}
+                    />
+                    <div className="absolute right-0 mt-2 w-56 bg-dark-900 rounded-xl shadow-xl border border-dark-800 py-2 z-50">
+                      <div className="px-4 py-3 border-b border-dark-800">
+                        <p className="text-white font-medium text-sm">{user?.name}</p>
+                        <p className="text-dark-400 text-xs truncate">{user?.email}</p>
+                      </div>
+                      <Link
+                        to="/profile"
+                        onClick={() => setProfileMenuOpen(false)}
+                        className="flex items-center space-x-3 px-4 py-2.5 text-dark-400 hover:text-white hover:bg-dark-800/50 transition"
+                      >
+                        <User className="w-4 h-4" />
+                        <span className="text-sm">Profile</span>
+                      </Link>
+                      <Link
+                        to="/settings"
+                        onClick={() => setProfileMenuOpen(false)}
+                        className="flex items-center space-x-3 px-4 py-2.5 text-dark-400 hover:text-white hover:bg-dark-800/50 transition"
+                      >
+                        <Settings className="w-4 h-4" />
+                        <span className="text-sm">Settings</span>
+                      </Link>
+                      <div className="border-t border-dark-800 my-1" />
+                      <button
+                        onClick={() => {
+                          setProfileMenuOpen(false);
+                          handleLogout();
+                        }}
+                        className="w-full flex items-center space-x-3 px-4 py-2.5 text-red-400 hover:text-red-300 hover:bg-red-500/10 transition"
+                      >
+                        <LogOut className="w-4 h-4" />
+                        <span className="text-sm">Logout</span>
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
+
+              {/* Mobile Menu Button */}
+              <button
+                onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                className="mobile-menu-button md:hidden p-2 text-dark-400 hover:text-white transition rounded-lg hover:bg-dark-800/50"
+                aria-label="Toggle menu"
+              >
+                {mobileMenuOpen ? (
+                  <X className="w-6 h-6" />
+                ) : (
+                  <Menu className="w-6 h-6" />
+                )}
+              </button>
             </div>
           </div>
+
+          {/* Mobile Navigation Menu */}
+          {mobileMenuOpen && (
+            <div className="mobile-menu-container md:hidden border-t border-dark-800 py-3 animate-fade-in">
+              <div className="flex flex-col space-y-1">
+                <Link
+                  to="/messages"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="flex items-center space-x-3 px-4 py-3 text-dark-400 hover:text-white hover:bg-dark-800/50 rounded-lg transition"
+                >
+                  <MessageSquare className="w-5 h-5" />
+                  <span>Messages</span>
+                </Link>
+                <Link
+                  to="/network"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="flex items-center space-x-3 px-4 py-3 text-dark-400 hover:text-white hover:bg-dark-800/50 rounded-lg transition"
+                >
+                  <Target className="w-5 h-5" />
+                  <span>Network</span>
+                </Link>
+                <Link
+                  to="/history"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="flex items-center space-x-3 px-4 py-3 text-dark-400 hover:text-white hover:bg-dark-800/50 rounded-lg transition"
+                >
+                  <Clock className="w-5 h-5" />
+                  <span>History</span>
+                </Link>
+              </div>
+            </div>
+          )}
         </div>
       </header>
 
@@ -242,6 +397,84 @@ export default function Home() {
               <ChevronRight className="w-5 h-5 text-dark-500 group-hover:text-primary-400 transition" />
             </div>
           </Link>
+        </div>
+
+        {/* Friends Section */}
+        <div className="glass rounded-2xl p-6 mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 bg-gradient-to-br from-green-500 to-emerald-500 rounded-xl flex items-center justify-center">
+                <Users className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h3 className="text-white font-semibold text-lg">Friends</h3>
+                <p className="text-dark-400 text-xs">{friends.length} connected</p>
+              </div>
+            </div>
+            <Link
+              to="/friends"
+              className="text-primary-400 hover:text-primary-300 text-sm font-medium flex items-center space-x-1"
+            >
+              <span>View All</span>
+              <ChevronRight className="w-4 h-4" />
+            </Link>
+          </div>
+
+          {friendsLoading ? (
+            <div className="text-center py-8 text-dark-400 text-sm">Loading friends...</div>
+          ) : friends.length === 0 ? (
+            <div className="text-center py-8">
+              <UserPlus className="w-12 h-12 text-dark-700 mx-auto mb-3" />
+              <p className="text-dark-400 text-sm mb-2">No friends yet</p>
+              <Link
+                to="/network"
+                className="text-primary-400 hover:text-primary-300 text-sm font-medium"
+              >
+                Connect with people →
+              </Link>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+              {friends.slice(0, 8).map((friend) => (
+                <button
+                  key={friend._id}
+                  onClick={async () => {
+                    if (!accessToken || !user) return;
+                    try {
+                      const API_URL = getApiUrl();
+                      const response = await fetch(`${API_URL}/api/messages/conversations/private`, {
+                        method: 'POST',
+                        headers: {
+                          'Authorization': `Bearer ${accessToken}`,
+                          'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                          targetUserId: friend.connectedUserId._id,
+                        }),
+                      });
+                      if (response.ok) {
+                        const data = await response.json();
+                        // Navigate to dedicated Friend Chat page (WhatsApp-style)
+                        navigate(`/friends/chat/${data.conversation._id}`);
+                      }
+                    } catch (error) {
+                      console.error('Start private chat error:', error);
+                    }
+                  }}
+                  className="flex flex-col items-center space-y-2 p-3 glass-card rounded-xl hover:bg-dark-800/50 transition group"
+                >
+                  <div className="w-12 h-12 bg-gradient-to-br from-primary-500 to-purple-500 rounded-full flex items-center justify-center">
+                    <span className="text-white font-semibold text-sm">
+                      {friend.connectedUserId?.name?.charAt(0).toUpperCase() || '?'}
+                    </span>
+                  </div>
+                  <p className="text-white text-xs font-medium truncate w-full text-center">
+                    {friend.connectedUserId?.name || 'Unknown'}
+                  </p>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Features */}

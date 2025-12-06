@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/auth';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastContainer } from './components/Toast';
+import FloatingCallOverlay from './components/FloatingCallOverlay';
 import LandingPage from './pages/LandingPage';
 import Login from './pages/Login';
 import Register from './pages/Register';
@@ -12,6 +13,11 @@ import History from './pages/History';
 import CallDetail from './pages/CallDetail';
 import Messages from './pages/Messages';
 import Network from './pages/Network';
+import PrivateMessages from './pages/PrivateMessages';
+import Friends from './pages/Friends';
+import FriendChat from './pages/FriendChat';
+import Profile from './pages/Profile';
+import Settings from './pages/Settings';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuthStore();
@@ -41,6 +47,7 @@ function App() {
   return (
     <ErrorBoundary>
       <ToastContainer />
+      <FloatingCallOverlay />
       <Routes>
         <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<Login />} />
@@ -100,6 +107,54 @@ function App() {
           element={
             <ProtectedRoute>
               <Network />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/private-messages"
+          element={
+            <ProtectedRoute>
+              <PrivateMessages />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/friends"
+          element={
+            <ProtectedRoute>
+              <Friends />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/friends/chat/:conversationId"
+          element={
+            <ProtectedRoute>
+              <FriendChat />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/friends/chat/user/:userId"
+          element={
+            <ProtectedRoute>
+              <FriendChat />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/profile"
+          element={
+            <ProtectedRoute>
+              <Profile />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            <ProtectedRoute>
+              <Settings />
             </ProtectedRoute>
           }
         />

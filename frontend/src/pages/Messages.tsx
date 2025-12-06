@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { io, Socket } from 'socket.io-client';
 import {
   MessageSquare,
@@ -72,6 +72,7 @@ interface Message {
 }
 
 export default function Messages() {
+  const navigate = useNavigate();
   const { accessToken, user } = useAuthStore();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
@@ -79,7 +80,7 @@ export default function Messages() {
   const [newMessage, setNewMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
-  const [longPressTimer, setLongPressTimer] = useState<NodeJS.Timeout | null>(null);
+  const [longPressTimer, setLongPressTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
   const [showReactionPicker, setShowReactionPicker] = useState<string | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -328,18 +329,17 @@ export default function Messages() {
     if (message.senderId._id === user?._id) return;
     if (selectedConversation?.type !== 'group') return;
 
-    // Show confirmation and create private breakout conversation
-    if (confirm(`Create a private conversation with ${message.senderId.name}?`)) {
-      createPrivateBreakout(message);
-    }
+    // Immediately open private chat - no confirmation needed
+    createPrivateBreakout(message);
   };
 
   const createPrivateBreakout = async (message: Message) => {
     if (!accessToken || !selectedConversation) return;
 
     try {
+      // Use the private conversation endpoint which creates OR retrieves existing conversation
       const response = await fetch(
-        `${API_URL}/api/messages/conversations/${selectedConversation._id}/breakout`,
+        `${API_URL}/api/messages/conversations/private`,
         {
           method: 'POST',
           headers: {
@@ -348,6 +348,7 @@ export default function Messages() {
           },
           body: JSON.stringify({
             targetUserId: message.senderId._id,
+            context: `Re: "${message.content.substring(0, 50)}${message.content.length > 50 ? '...' : ''}"`,
             originalMessageId: message._id,
           }),
         }
@@ -355,18 +356,16 @@ export default function Messages() {
 
       if (response.ok) {
         const data = await response.json();
-        toast.success('Private Chat Created', `Started a private conversation with ${message.senderId.name}`);
-        // Navigate to the new private conversation
-        setSelectedConversation(data.conversation);
-        fetchMessages(data.conversation._id);
-        fetchConversations(); // Refresh list
+        // Navigate directly to the WhatsApp-style FriendChat page
+        navigate(`/friends/chat/${data.conversation._id}`);
+        toast.success('Private Chat', `Opened conversation with ${message.senderId.name}`);
       } else {
         const errorData = await response.json().catch(() => ({}));
-        toast.error('Error', errorData.error || 'Failed to create private chat');
+        toast.error('Error', errorData.error || 'Failed to open private chat');
       }
     } catch (error) {
       console.error('Create breakout error:', error);
-      toast.error('Error', 'Failed to create private chat. Please try again.');
+      toast.error('Error', 'Failed to open private chat. Please try again.');
     }
   };
 

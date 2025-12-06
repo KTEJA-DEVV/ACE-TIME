@@ -7,6 +7,7 @@ import { asyncHandler } from '../middleware/errorHandler';
 import OpenAI from 'openai';
 import { getOpenAI } from '../services/openai';
 import { generateImage, isStabilityConfigured } from '../services/stability';
+import { generateFreeImage, isFreeAIAvailable } from '../services/freeAI';
 
 const router = Router();
 
@@ -19,26 +20,75 @@ router.post(
 
     console.log('[IMAGES] 📝 Image generation request:', { prompt, style, callId, conversationId });
     
-    // Try Stability AI first (free tier available)
+    // Priority: Free AI > Stability AI > OpenAI
+    const useFreeAI = isFreeAIAvailable();
     const useStability = isStabilityConfigured();
     const openai = getOpenAI();
-    
-    if (!useStability && !openai) {
-      console.error('[IMAGES] ❌ No image generation service configured');
-      console.error('[IMAGES] Please set either:');
-      console.error('[IMAGES]   - STABILITY_API_KEY (recommended - free tier available)');
-      console.error('[IMAGES]   - OPENAI_API_KEY (paid)');
-      res.status(503).json({ 
-        error: 'Image generation not configured. Please set STABILITY_API_KEY (free) or OPENAI_API_KEY in backend/.env file.' 
-      });
-      return;
-    }
 
     try {
       let imageUrl: string;
       let revisedPrompt: string | undefined = undefined;
 
-      if (useStability) {
+      // Try free AI first (always available, no cost)
+      if (useFreeAI) {
+        console.log('[IMAGES] ✅ Using free Hugging Face AI for image generation (no cost)');
+        try {
+          imageUrl = await generateFreeImage({
+            prompt,
+            style,
+            width: 512,
+            height: 512,
+          });
+          revisedPrompt = prompt;
+        } catch (freeError) {
+          console.warn('[IMAGES] ⚠️ Free AI failed, trying fallback:', freeError);
+          // Fallback to Stability AI or OpenAI if free AI fails
+          if (useStability) {
+            console.log('[IMAGES] ✅ Falling back to Stability AI');
+            imageUrl = await generateImage({
+              prompt,
+              style,
+              width: 1024,
+              height: 1024,
+              steps: 30,
+            });
+            revisedPrompt = prompt;
+          } else if (openai) {
+            // Fallback to OpenAI DALL-E
+            console.log('[IMAGES] ✅ Falling back to OpenAI DALL-E');
+            const stylePrompts: Record<string, string> = {
+              realistic: 'photorealistic, high detail, 8k resolution',
+              artistic: 'artistic, painterly, expressive brushstrokes',
+              sketch: 'pencil sketch, hand-drawn, detailed linework',
+              dream: 'dreamlike, surreal, ethereal, magical atmosphere',
+              abstract: 'abstract art, geometric shapes, vibrant colors',
+            };
+
+            const enhancedPrompt = `${prompt}. Style: ${stylePrompts[style] || stylePrompts.dream}`;
+
+            console.log('[IMAGES] Generating image with prompt:', enhancedPrompt);
+            const response = await openai.images.generate({
+              model: 'dall-e-3',
+              prompt: enhancedPrompt,
+              n: 1,
+              size: '1024x1024',
+              quality: 'standard',
+            });
+
+            console.log('[IMAGES] OpenAI response:', JSON.stringify(response, null, 2));
+            const imageData = response.data?.[0];
+            imageUrl = imageData?.url || '';
+            revisedPrompt = imageData?.revised_prompt;
+
+            if (!imageUrl) {
+              console.error('[IMAGES] No image URL in response:', response);
+              throw new Error('No image URL returned from OpenAI');
+            }
+          } else {
+            throw freeError;
+          }
+        }
+      } else if (useStability) {
         // Use Stability AI (free tier)
         console.log('[IMAGES] ✅ Using Stability AI for image generation');
         imageUrl = await generateImage({
@@ -169,13 +219,9 @@ router.post(
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const { callId, style = 'dream' } = req.body;
 
+    const useFreeAI = isFreeAIAvailable();
     const useStability = isStabilityConfigured();
     const openai = getOpenAI();
-    
-    if (!useStability && !openai) {
-      res.status(503).json({ error: 'Image generation not configured. Please set STABILITY_API_KEY or OPENAI_API_KEY.' });
-      return;
-    }
 
     // Get recent transcript
     const transcript = await Transcript.findOne({ callId });
@@ -215,8 +261,53 @@ router.post(
         generatedPrompt = context.substring(0, 200);
       }
 
-      // Generate image
-      if (useStability) {
+      // Generate image - try free AI first
+      if (useFreeAI) {
+        console.log('[IMAGES] ✅ Using free Hugging Face AI for transcript-based image generation');
+        try {
+          imageUrl = await generateFreeImage({
+            prompt: generatedPrompt,
+            style,
+            width: 512,
+            height: 512,
+          });
+        } catch (freeError) {
+          console.warn('[IMAGES] ⚠️ Free AI failed, trying fallback:', freeError);
+          // Fallback to Stability AI or OpenAI
+          if (useStability) {
+            imageUrl = await generateImage({
+              prompt: generatedPrompt,
+              style,
+              width: 1024,
+              height: 1024,
+              steps: 30,
+            });
+          } else if (openai) {
+            const stylePrompts: Record<string, string> = {
+              realistic: 'photorealistic, high detail',
+              artistic: 'artistic, painterly',
+              sketch: 'pencil sketch, hand-drawn',
+              dream: 'dreamlike, surreal, ethereal',
+              abstract: 'abstract art, geometric',
+            };
+
+            const imageResponse = await openai.images.generate({
+              model: 'dall-e-3',
+              prompt: `${generatedPrompt}. Style: ${stylePrompts[style]}`,
+              n: 1,
+              size: '1024x1024',
+            });
+
+            const imageData = imageResponse.data?.[0];
+            imageUrl = imageData?.url || '';
+            if (!imageUrl) {
+              throw new Error('No image generated');
+            }
+          } else {
+            throw freeError;
+          }
+        }
+      } else if (useStability) {
         imageUrl = await generateImage({
           prompt: generatedPrompt,
           style,

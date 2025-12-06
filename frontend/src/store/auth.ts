@@ -42,6 +42,7 @@ interface AuthState {
   loadStoredAuth: () => void;
   refreshAccessToken: () => Promise<boolean>;
   clearError: () => void;
+  setUser: (user: User) => void;
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -316,6 +317,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   clearError: () => {
     set({ error: null });
+  },
+
+  setUser: (user: User) => {
+    localStorage.setItem('user', JSON.stringify(user));
+    set({ user });
   },
 }));
 

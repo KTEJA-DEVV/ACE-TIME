@@ -94,17 +94,11 @@ export const generateNotes = async (
 ): Promise<NotesResult> => {
   const client = getOpenAI();
   
-  // If no OpenAI key, return mock notes for development
+  // If no OpenAI key, use free AI service
   if (!client) {
-    console.warn('⚠️ OpenAI not configured - using mock notes');
-    return {
-      summary: 'AI notes unavailable - configure OPENAI_API_KEY to enable this feature.',
-      bullets: ['Configure your OpenAI API key in .env file'],
-      actionItems: [{ text: 'Add OPENAI_API_KEY to environment variables' }],
-      decisions: [],
-      suggestedReplies: [],
-      keyTopics: ['Setup', 'Configuration'],
-    };
+    console.log('[OPENAI] ⚠️ OpenAI not configured - using free AI service');
+    const { generateFreeNotes } = await import('./freeAI');
+    return generateFreeNotes(transcriptText, previousNotes);
   }
 
   const systemPrompt = `You are AceTime AI assistant. Based on the meeting transcript provided, generate structured notes.

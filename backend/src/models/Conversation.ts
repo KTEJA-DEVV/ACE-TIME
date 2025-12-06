@@ -78,6 +78,17 @@ const conversationSchema = new Schema<IConversation>(
 
 conversationSchema.index({ participants: 1 });
 conversationSchema.index({ 'lastMessage.timestamp': -1 });
+conversationSchema.index({ type: 1, participants: 1 });
+
+// Compound index for efficient deduplication queries
+// This helps MongoDB quickly find existing conversations with the same participants
+conversationSchema.index(
+  { type: 1, participants: 1 },
+  { 
+    name: 'conversation_dedupe_idx',
+    background: true 
+  }
+);
 
 export const Conversation = mongoose.model<IConversation>('Conversation', conversationSchema);
 

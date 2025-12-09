@@ -29,11 +29,12 @@ router.post(
     const callSession = new CallSession({
       roomId,
       hostId: req.userId,
-      guestIds: [],
+      guestIds: req.body.participants || [],
       status: 'waiting',
       metadata: {
         audioOnly: req.body.audioOnly || false,
-        participantCount: 1,
+        participantCount: (req.body.participants?.length || 0) + 1,
+        conversationId: req.body.conversationId || null, // Link to conversation if provided
       },
     });
 
@@ -56,6 +57,27 @@ router.post(
     callSession.transcriptId = transcript._id;
     callSession.notesId = notes._id;
     await callSession.save();
+
+    // Emit call invitation to participants via socket
+    const io = req.app.get('io');
+    if (io && req.body.participants && req.body.participants.length > 0) {
+      // Get caller info
+      const User = (await import('../models/User')).User;
+      const caller = await User.findById(req.userId).select('name avatar').lean();
+      
+      // Emit call invitation to each participant
+      req.body.participants.forEach((participantId: string) => {
+        io.to(`user:${participantId}`).emit('call:invitation', {
+          roomId,
+          callId: callSession._id,
+          callerId: req.userId?.toString(),
+          callerName: caller?.name || 'Someone',
+          callerAvatar: caller?.avatar,
+          isVideo: !req.body.audioOnly,
+          conversationId: req.body.conversationId || null,
+        });
+      });
+    }
 
     res.status(201).json({
       message: 'Room created',
@@ -173,6 +195,34 @@ router.delete(
       roomId,
       duration: callSession.duration,
     });
+  })
+);
+
+// POST /api/rooms/:id/decline - Decline a call invitation
+router.post(
+  '/:id/decline',
+  authenticate,
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id: roomId } = req.params;
+    const userId = req.userId!;
+
+    const callSession = await CallSession.findOne({ roomId });
+    
+    if (!callSession) {
+      res.status(404).json({ error: 'Room not found' });
+      return;
+    }
+
+    // Emit call declined event to the caller
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`user:${callSession.hostId}`).emit('call:declined', {
+        roomId,
+        declinedBy: userId.toString(),
+      });
+    }
+
+    res.json({ message: 'Call declined' });
   })
 );
 

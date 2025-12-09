@@ -16,9 +16,14 @@ import {
   Smile,
   X,
   Check,
+  Reply,
+  Copy,
+  Forward,
+  AtSign,
 } from 'lucide-react';
 import { useAuthStore } from '../store/auth';
 import { toast } from '../components/Toast';
+import TapHint from '../components/TapHint';
 
 // Use relative URL in production (when served from backend), absolute URL in development
 const getSocketUrl = () => {
@@ -88,6 +93,15 @@ export default function Messages() {
   const [groupName, setGroupName] = useState('');
   const [selectedParticipants, setSelectedParticipants] = useState<string[]>([]);
   const [isLongPressing, setIsLongPressing] = useState<string | null>(null);
+  const [longPressMenu, setLongPressMenu] = useState<{
+    messageId: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [tapHint, setTapHint] = useState<{
+    message: string;
+    position: { x: number; y: number };
+  } | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const currentConversationIdRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -324,16 +338,26 @@ export default function Messages() {
     }
   };
 
-  const handleMessageLongPress = (message: Message) => {
-    // Only allow long press on messages from other users in group conversations
+  const handleNameTap = (message: Message, e: React.MouseEvent | React.TouchEvent) => {
     if (message.senderId._id === user?._id) return;
     if (selectedConversation?.type !== 'group') return;
-
-    // Immediately open private chat - no confirmation needed
-    createPrivateBreakout(message);
+    
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    
+    // Show tap hint
+    setTapHint({
+      message: 'Hold to reply in private',
+      position: { x: clientX, y: clientY },
+    });
+  };
+  
+  const handleMessageLongPress = (message: Message, x: number, y: number) => {
+    // Show menu for all messages
+    setLongPressMenu({ messageId: message._id, x, y });
   };
 
-  const createPrivateBreakout = async (message: Message) => {
+  const createPrivateBreakout = async (message: Message, groupName?: string) => {
     if (!accessToken || !selectedConversation) return;
 
     try {
@@ -350,6 +374,8 @@ export default function Messages() {
             targetUserId: message.senderId._id,
             context: `Re: "${message.content.substring(0, 50)}${message.content.length > 50 ? '...' : ''}"`,
             originalMessageId: message._id,
+            originalConversationId: selectedConversation._id,
+            groupName: groupName || selectedConversation.name || 'Group',
           }),
         }
       );
@@ -357,7 +383,13 @@ export default function Messages() {
       if (response.ok) {
         const data = await response.json();
         // Navigate directly to the WhatsApp-style FriendChat page
-        navigate(`/friends/chat/${data.conversation._id}`);
+        // Opens immediately with the selected person, ready to type
+        const contextMessage = `Re: "${message.content.substring(0, 50)}${message.content.length > 50 ? '...' : ''}"`;
+        navigate(`/friends/chat/${data.conversation._id}`, {
+          state: {
+            initialMessage: contextMessage, // Pre-populate input with context
+          },
+        });
         toast.success('Private Chat', `Opened conversation with ${message.senderId.name}`);
       } else {
         const errorData = await response.json().catch(() => ({}));
@@ -369,15 +401,42 @@ export default function Messages() {
     }
   };
 
-  const handleMouseDown = (message: Message) => {
+  const handleMouseDown = (message: Message, e: React.MouseEvent | React.TouchEvent) => {
+    if (message.senderId._id === user?._id && selectedConversation?.type !== 'group') {
+      // Allow long press on own messages in direct chats
+      const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+      const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+      
+      const timer = setTimeout(() => {
+        handleMessageLongPress(message, clientX, clientY);
+        setIsLongPressing(null);
+      }, 500);
+      setLongPressTimer(timer);
+      return;
+    }
+    
     if (message.senderId._id === user?._id) return;
-    if (selectedConversation?.type !== 'group') return;
+    if (selectedConversation?.type !== 'group') {
+      // Allow long press in direct chats too
+      const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+      const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+      
+      const timer = setTimeout(() => {
+        handleMessageLongPress(message, clientX, clientY);
+        setIsLongPressing(null);
+      }, 500);
+      setLongPressTimer(timer);
+      return;
+    }
 
     // Show visual feedback
     setIsLongPressing(message._id);
+    
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
 
     const timer = setTimeout(() => {
-      handleMessageLongPress(message);
+      handleMessageLongPress(message, clientX, clientY);
       setIsLongPressing(null);
     }, 500); // 500ms long press
     setLongPressTimer(timer);
@@ -389,6 +448,26 @@ export default function Messages() {
       setLongPressTimer(null);
     }
     setIsLongPressing(null);
+  };
+
+  const handleReplyPrivately = async (message: Message) => {
+    setLongPressMenu(null);
+    const groupName = selectedConversation?.name || (selectedConversation?.type === 'group' 
+      ? 'Group' 
+      : undefined);
+    await createPrivateBreakout(message, groupName);
+  };
+  
+  const handleCopyMessage = (message: Message) => {
+    navigator.clipboard.writeText(message.content);
+    toast.success('Copied', 'Message copied to clipboard');
+    setLongPressMenu(null);
+  };
+  
+  const handleMention = (message: Message) => {
+    setReplyingTo(message);
+    setNewMessage(`@${message.senderId.name} `);
+    setLongPressMenu(null);
   };
 
   const handleReaction = async (messageId: string, emoji: string) => {
@@ -663,12 +742,12 @@ export default function Messages() {
                   className={`flex relative ${
                     msg.senderId._id === user?._id ? 'justify-end' : 'justify-start'
                   }`}
-                  onMouseDown={() => handleMouseDown(msg)}
+                  onMouseDown={(e) => handleMouseDown(msg, e)}
                   onMouseUp={handleMouseUp}
                   onMouseLeave={handleMouseUp}
                   onTouchStart={(e) => {
                     e.preventDefault();
-                    handleMouseDown(msg);
+                    handleMouseDown(msg, e);
                   }}
                   onTouchEnd={handleMouseUp}
                   onTouchCancel={handleMouseUp}
@@ -698,7 +777,17 @@ export default function Messages() {
                       </div>
                     )}
                     {msg.senderId._id !== user?._id && !msg.aiGenerated && (
-                      <div className="text-primary-400 text-xs mb-1">
+                      <div 
+                        className="text-primary-400 text-xs mb-1 cursor-pointer hover:underline"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleNameTap(msg, e);
+                        }}
+                        onTouchStart={(e) => {
+                          e.stopPropagation();
+                          handleNameTap(msg, e);
+                        }}
+                      >
                         {msg.senderId.name}
                       </div>
                     )}
@@ -802,6 +891,77 @@ export default function Messages() {
               );
               })}
             </div>
+
+            {/* Long-Press Menu */}
+            {longPressMenu && (() => {
+              const message = messages.find(m => m._id === longPressMenu.messageId);
+              if (!message) return null;
+              
+              const isOwnMessage = message.senderId._id === user?._id;
+              const isGroup = selectedConversation?.type === 'group';
+              
+              return (
+                <>
+                  <div 
+                    className="fixed inset-0 z-[99]"
+                    onClick={() => setLongPressMenu(null)}
+                  />
+                  <div
+                    className="fixed z-[100] bg-dark-800 border border-dark-700 rounded-xl shadow-2xl py-2 min-w-[200px]"
+                    style={{
+                      left: `${Math.min(longPressMenu.x, window.innerWidth - 220)}px`,
+                      top: `${Math.min(longPressMenu.y, window.innerHeight - 200)}px`,
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {!isOwnMessage && isGroup && (
+                      <button
+                        onClick={() => handleReplyPrivately(message)}
+                        className="w-full px-4 py-3 flex items-center space-x-3 hover:bg-dark-700/50 transition text-left"
+                      >
+                        <Reply className="w-4 h-4 text-primary-400" />
+                        <span className="text-white text-sm">Reply Privately</span>
+                      </button>
+                    )}
+                    {isGroup && (
+                      <button
+                        onClick={() => handleMention(message)}
+                        className="w-full px-4 py-3 flex items-center space-x-3 hover:bg-dark-700/50 transition text-left"
+                      >
+                        <AtSign className="w-4 h-4 text-blue-400" />
+                        <span className="text-white text-sm">Mention</span>
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleCopyMessage(message)}
+                      className="w-full px-4 py-3 flex items-center space-x-3 hover:bg-dark-700/50 transition text-left"
+                    >
+                      <Copy className="w-4 h-4 text-dark-400" />
+                      <span className="text-white text-sm">Copy</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        toast.info('Forward', 'Forward feature coming soon');
+                        setLongPressMenu(null);
+                      }}
+                      className="w-full px-4 py-3 flex items-center space-x-3 hover:bg-dark-700/50 transition text-left"
+                    >
+                      <Forward className="w-4 h-4 text-dark-400" />
+                      <span className="text-white text-sm">Forward</span>
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
+
+            {/* Tap Hint */}
+            {tapHint && (
+              <TapHint
+                message={tapHint.message}
+                position={tapHint.position}
+                onDismiss={() => setTapHint(null)}
+              />
+            )}
 
             {/* Input */}
             <div className="p-4 border-t border-dark-800">

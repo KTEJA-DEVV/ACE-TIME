@@ -100,6 +100,19 @@ router.post(
     callSession.metadata.recordingSize = req.file.size;
     await callSession.save();
 
+    // Emit notification to all participants
+    const io = req.app.get('io');
+    if (io) {
+      const participants = [callSession.hostId, ...(callSession.guestIds || [])];
+      participants.forEach((participantId) => {
+        io.to(`user:${participantId}`).emit('call:recording:ready', {
+          callId: id,
+          recordingUrl: callSession.recordingUrl,
+          duration: callSession.duration,
+        });
+      });
+    }
+
     res.json({
       message: 'Recording uploaded successfully',
       fileId: result.fileId,

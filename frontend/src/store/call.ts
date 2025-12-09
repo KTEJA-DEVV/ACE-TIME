@@ -48,7 +48,7 @@ interface AINotes {
 }
 
 interface Participant {
-  oderId: string;
+  userId: string;
   userName: string;
   socketId: string;
 }
@@ -63,9 +63,11 @@ declare global {
 
 interface CallState {
   socket: Socket | null;
-  peerConnection: RTCPeerConnection | null;
+  peerConnection: RTCPeerConnection | null; // Keep for backward compatibility (1-on-1 calls)
+  peerConnections: Map<string, RTCPeerConnection>; // Map of socketId -> peer connection (for multiple participants)
   localStream: MediaStream | null;
-  remoteStream: MediaStream | null;
+  remoteStream: MediaStream | null; // Keep for backward compatibility (1-on-1 calls)
+  remoteStreams: Map<string, MediaStream>; // Map of socketId -> remote stream (for multiple participants)
   speechRecognition: any | null;
   callRecorder: MediaRecorder | null; // For recording the call
   
@@ -117,8 +119,10 @@ const ICE_SERVERS = {
 export const useCallStore = create<CallState>((set, get) => ({
   socket: null,
   peerConnection: null,
+  peerConnections: new Map<string, RTCPeerConnection>(),
   localStream: null,
   remoteStream: null,
+  remoteStreams: new Map<string, MediaStream>(),
   speechRecognition: null,
   callRecorder: null,
   
@@ -162,8 +166,11 @@ export const useCallStore = create<CallState>((set, get) => ({
       transports: ['websocket', 'polling'], // Fallback to polling if websocket fails
       reconnection: true,
       reconnectionDelay: 1000,
-      reconnectionAttempts: 5,
-      timeout: 20000,
+      reconnectionAttempts: 10, // Increase attempts for better reliability
+      timeout: 20000, // 20 second connection timeout
+      upgrade: true, // Allow transport upgrades
+      rememberUpgrade: true, // Remember successful transport
+      forceNew: false, // Reuse existing connection if available
     });
     
     // Store socket immediately so joinRoom can access it
@@ -172,29 +179,68 @@ export const useCallStore = create<CallState>((set, get) => ({
     console.log('[SOCKET] Initializing connection to:', SOCKET_URL);
     console.log('[SOCKET] Socket instance created, waiting for connection...');
 
+    // Track connection attempts to avoid showing errors too early
+    let connectionAttempts = 0;
+    let errorToastShown = false;
+
     socket.on('connect', () => {
       console.log('[SOCKET] ✅ Connected successfully');
       console.log('[SOCKET] Socket ID:', socket.id);
       console.log('[SOCKET] Transport:', socket.io.engine?.transport?.name || 'unknown');
       set({ error: null });
-      toast.success('Connected', 'Socket connection established');
+      // Reset error tracking on successful connection
+      connectionAttempts = 0;
+      errorToastShown = false;
+      // Don't show toast on every connect (too noisy, connection is expected)
+      // toast.success('Connected', 'Socket connection established');
     });
-
+    
     socket.on('connect_error', (error: any) => {
-      console.error('[SOCKET] ❌ Connection error:', error);
-      console.error('[SOCKET] Error details:', {
-        message: error.message,
-        type: error.type || 'unknown',
-        description: error.description || 'No description',
-      });
-      const message = `Unable to connect to call server: ${error.message}`;
-      set({ error: message });
-      toast.error('Connection Error', message);
+      connectionAttempts++;
+      
+      // Log error for debugging
+      console.warn('[SOCKET] ⚠️ Connection error (will retry):', error.message, `Attempt ${connectionAttempts}`);
+      
+      // Transport errors are expected - Socket.IO will automatically try polling
+      const isTransportError = error.type === 'TransportError' || 
+                               error.message === 'websocket error' ||
+                               error.message?.includes('websocket') ||
+                               error.message?.includes('transport');
+      
+      if (isTransportError) {
+        // Transport error - just log, Socket.IO will automatically try polling
+        console.log('[SOCKET] WebSocket transport failed, will try polling fallback...');
+        return; // Don't show error for transport failures
+      }
+      
+      // For non-transport errors, only show error after multiple failed attempts
+      // This gives Socket.IO time to retry and potentially succeed
+      if (connectionAttempts >= 5 && !errorToastShown) {
+        console.error('[SOCKET] ❌ Connection failed after multiple attempts:', {
+          message: error.message,
+          type: error.type || 'unknown',
+          attempts: connectionAttempts,
+        });
+        
+        errorToastShown = true;
+        const message = `Unable to connect to call server: ${error.message || 'Connection failed'}`;
+        set({ error: message });
+        toast.error('Connection Error', message);
+      }
+    });
+    
+    // Reset error tracking on successful connection
+    socket.on('connect', () => {
+      connectionAttempts = 0;
+      errorToastShown = false;
     });
     
     socket.on('reconnect', (attemptNumber) => {
       console.log('[SOCKET] ✅ Reconnected after', attemptNumber, 'attempts');
-      toast.success('Reconnected', 'Connection restored');
+      // Only show toast if it took multiple attempts (significant reconnection)
+      if (attemptNumber > 3) {
+        toast.success('Reconnected', 'Connection restored');
+      }
       
       // Rejoin room if we were in one
       const { roomId } = get();
@@ -205,7 +251,8 @@ export const useCallStore = create<CallState>((set, get) => ({
     });
     
     socket.on('reconnect_error', (error) => {
-      console.error('[SOCKET] ❌ Reconnection error:', error);
+      // Only log, don't show error - Socket.IO will keep trying
+      console.warn('[SOCKET] ⚠️ Reconnection attempt failed (will retry):', error.message || error);
     });
     
     socket.on('reconnect_failed', () => {
@@ -240,11 +287,11 @@ export const useCallStore = create<CallState>((set, get) => ({
       const seen = new Set<string>();
       const filteredParticipants = (data.participants || []).filter((p: any) => {
         // Filter out current user
-        if (p.oderId === currentUserId || p.socketId === currentSocketId) {
+        if (p.userId === currentUserId || p.socketId === currentSocketId) {
           return false;
         }
         // Remove duplicates by userId or socketId
-        const key = `${p.oderId}-${p.socketId}`;
+        const key = `${p.userId}-${p.socketId}`;
         if (seen.has(key)) {
           return false;
         }
@@ -283,17 +330,79 @@ export const useCallStore = create<CallState>((set, get) => ({
       });
       
       const { peerConnection, localStream } = get();
-      if (peerConnection && localStream && get().isHost) {
+      if (peerConnection && localStream) {
         try {
-          const offer = await peerConnection.createOffer();
-          await peerConnection.setLocalDescription(offer);
-          socket.emit('signal:offer', {
-            targetId: data.socketId,
-            offer: peerConnection.localDescription,
+          // CRITICAL: Verify tracks are added before creating offer
+          const senders = peerConnection.getSenders();
+          const hasVideoSender = senders.some(s => s.track && s.track.kind === 'video');
+          const hasAudioSender = senders.some(s => s.track && s.track.kind === 'audio');
+          
+          console.log('[WEBRTC] 📊 Peer connection senders check:', {
+            totalSenders: senders.length,
+            hasVideoSender,
+            hasAudioSender,
+            senders: senders.map(s => ({
+              kind: s.track?.kind,
+              enabled: s.track?.enabled,
+              id: s.track?.id,
+            })),
           });
-        } catch (error) {
-          console.error('Error creating offer:', error);
+          
+          // If tracks are missing, add them now (shouldn't happen, but safety check)
+          if (!hasVideoSender || !hasAudioSender) {
+            console.warn('[WEBRTC] ⚠️ Missing tracks in peer connection, adding now...');
+            localStream.getTracks().forEach(track => {
+              const existingSender = senders.find(s => s.track && s.track.id === track.id);
+              if (!existingSender) {
+                console.log('[WEBRTC] Adding missing track:', track.kind, track.id);
+                peerConnection.addTrack(track, localStream);
+              }
+            });
+          }
+          
+          // Both host and non-host can create offers for 1-on-1 calls
+          // For group calls, only host creates offers
+          const isHost = get().isHost;
+          const participantCount = get().participants.length;
+          
+          // Create offer if host OR if it's a 1-on-1 call (participantCount === 1 means this is the second person)
+          if (isHost || participantCount === 1) {
+            console.log('[WEBRTC] 🎯 Creating offer for participant:', data.socketId);
+            console.log('[WEBRTC] 📋 Local stream tracks before offer:', {
+              videoTracks: localStream.getVideoTracks().length,
+              audioTracks: localStream.getAudioTracks().length,
+              videoEnabled: localStream.getVideoTracks()[0]?.enabled,
+              audioEnabled: localStream.getAudioTracks()[0]?.enabled,
+            });
+            
+            const offer = await peerConnection.createOffer({
+              offerToReceiveAudio: true,
+              offerToReceiveVideo: true,
+            });
+            
+            console.log('[WEBRTC] 📤 Offer created:', {
+              type: offer.type,
+              sdp: offer.sdp?.substring(0, 200) + '...',
+            });
+            
+            await peerConnection.setLocalDescription(offer);
+            console.log('[WEBRTC] ✅ Local description set, signaling state:', peerConnection.signalingState);
+            
+            socket.emit('signal:offer', {
+              targetId: data.socketId,
+              offer: peerConnection.localDescription,
+            });
+            console.log('[WEBRTC] 📡 Offer sent via Socket.IO to:', data.socketId);
+          }
+        } catch (error: any) {
+          console.error('[WEBRTC] ❌ Error creating offer:', error.message, error);
+          toast.error('Connection Error', 'Failed to establish video connection');
         }
+      } else {
+        console.warn('[WEBRTC] ⚠️ Cannot create offer - missing peer connection or local stream:', {
+          hasPeerConnection: !!peerConnection,
+          hasLocalStream: !!localStream,
+        });
       }
     });
 
@@ -304,19 +413,60 @@ export const useCallStore = create<CallState>((set, get) => ({
     });
 
     socket.on('signal:offer', async (data) => {
-      const { peerConnection } = get();
+      const { peerConnection, localStream } = get();
       if (peerConnection) {
         try {
+          console.log('[WEBRTC] 📥 Received offer from:', data.fromId);
+          console.log('[WEBRTC] 📋 Offer details:', {
+            type: data.offer?.type,
+            sdp: data.offer?.sdp?.substring(0, 200) + '...',
+          });
+          
+          // CRITICAL: Ensure tracks are added BEFORE setting remote description
+          if (localStream) {
+            const senders = peerConnection.getSenders();
+            const hasVideoSender = senders.some(s => s.track && s.track.kind === 'video');
+            const hasAudioSender = senders.some(s => s.track && s.track.kind === 'audio');
+            
+            if (!hasVideoSender || !hasAudioSender) {
+              console.log('[WEBRTC] 🔧 Adding tracks before handling offer...');
+              localStream.getTracks().forEach(track => {
+                const existingSender = senders.find(s => s.track && s.track.id === track.id);
+                if (!existingSender) {
+                  console.log('[WEBRTC] Adding track:', track.kind, track.id);
+                  peerConnection.addTrack(track, localStream);
+                }
+              });
+            }
+          }
+          
           await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
-          const answer = await peerConnection.createAnswer();
+          console.log('[WEBRTC] ✅ Remote description set, signaling state:', peerConnection.signalingState);
+          
+          const answer = await peerConnection.createAnswer({
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: true,
+          });
+          
+          console.log('[WEBRTC] 📤 Answer created:', {
+            type: answer.type,
+            sdp: answer.sdp?.substring(0, 200) + '...',
+          });
+          
           await peerConnection.setLocalDescription(answer);
+          console.log('[WEBRTC] ✅ Local description set, signaling state:', peerConnection.signalingState);
+          
           socket.emit('signal:answer', {
             targetId: data.fromId,
             answer: peerConnection.localDescription,
           });
-        } catch (error) {
-          console.error('Error handling offer:', error);
+          console.log('[WEBRTC] 📡 Answer sent via Socket.IO to:', data.fromId);
+        } catch (error: any) {
+          console.error('[WEBRTC] ❌ Error handling offer:', error.message, error);
+          toast.error('Connection Error', 'Failed to accept video connection');
         }
+      } else {
+        console.warn('[WEBRTC] ⚠️ Cannot handle offer - no peer connection');
       }
     });
 
@@ -342,10 +492,23 @@ export const useCallStore = create<CallState>((set, get) => ({
       const { peerConnection } = get();
       if (peerConnection) {
         try {
-          await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
-        } catch (error) {
-          console.error('Error adding ICE candidate:', error);
+          if (data.candidate) {
+            console.log('[WEBRTC] 📥 Received ICE candidate from:', data.fromId || 'unknown');
+            await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+            console.log('[WEBRTC] ✅ ICE candidate added');
+          } else {
+            console.log('[WEBRTC] 📥 Received null ICE candidate (end of candidates)');
+          }
+        } catch (error: any) {
+          // Ignore errors for duplicate or invalid candidates (common in WebRTC)
+          if (error.message?.includes('duplicate') || error.message?.includes('Invalid')) {
+            console.log('[WEBRTC] ℹ️ Ignoring duplicate/invalid ICE candidate');
+          } else {
+            console.error('[WEBRTC] ❌ Error adding ICE candidate:', error.message);
+          }
         }
+      } else {
+        console.warn('[WEBRTC] ⚠️ Cannot add ICE candidate - no peer connection');
       }
     });
 
@@ -537,9 +700,10 @@ export const useCallStore = create<CallState>((set, get) => ({
       toast.success('Room Created', `Room code: ${data.roomId}`);
       return data.roomId;
     } catch (error: any) {
-      // Network error
+      // Network error - check if server is reachable
       if (error instanceof TypeError && error.message === 'Failed to fetch') {
-        const message = 'Unable to connect to server';
+        console.error('[ROOM] Network error - server may not be running on', API_URL);
+        const message = 'Unable to connect to server. Please ensure the backend is running.';
         set({ error: message });
         toast.error('Connection Error', message);
         throw new Error(message);
@@ -648,7 +812,8 @@ export const useCallStore = create<CallState>((set, get) => ({
       });
     } catch (error: any) {
       if (error instanceof TypeError && error.message === 'Failed to fetch') {
-        const message = 'Unable to connect to server';
+        console.error('[ROOM] Network error - server may not be running on', API_URL);
+        const message = 'Unable to connect to server. Please ensure the backend is running.';
         set({ error: message, callStatus: 'idle' });
         toast.error('Connection Error', message);
         throw new Error(message);
@@ -662,54 +827,230 @@ export const useCallStore = create<CallState>((set, get) => ({
       throw error;
     }
 
-    // Get media devices
+    // Get media devices with proper error handling
+    let stream: MediaStream | null = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: true,
+      console.log('[WEBRTC] Requesting camera and microphone permissions...');
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          facingMode: 'user',
+        },
+      });
+      
+      console.log('[WEBRTC] ✅ Media stream obtained:', {
+        id: stream.id,
+        active: stream.active,
+        videoTracks: stream.getVideoTracks().length,
+        audioTracks: stream.getAudioTracks().length,
+        videoEnabled: stream.getVideoTracks()[0]?.enabled,
+        audioEnabled: stream.getAudioTracks()[0]?.enabled,
       });
 
-      const pc = new RTCPeerConnection(ICE_SERVERS);
-
-      stream.getTracks().forEach(track => {
-        pc.addTrack(track, stream);
+      // Verify tracks are actually enabled
+      stream.getVideoTracks().forEach(track => {
+        console.log('[WEBRTC] Video track:', {
+          id: track.id,
+          enabled: track.enabled,
+          readyState: track.readyState,
+          muted: track.muted,
+        });
       });
 
-      pc.ontrack = (event) => {
-        console.log('[WEBRTC] ontrack event received:', {
-          streams: event.streams?.length || 0,
-          track: event.track?.kind,
-          trackId: event.track?.id,
-          trackEnabled: event.track?.enabled,
+      stream.getAudioTracks().forEach(track => {
+        console.log('[WEBRTC] Audio track:', {
+          id: track.id,
+          enabled: track.enabled,
+          readyState: track.readyState,
+          muted: track.muted,
+        });
+      });
+    } catch (error: any) {
+      console.error('[WEBRTC] ❌ Error getting user media:', error);
+      let errorMessage = 'Failed to access camera/microphone';
+      
+      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+        errorMessage = 'Camera/microphone permission denied. Please allow access and refresh.';
+      } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+        errorMessage = 'No camera/microphone found. Please connect a device.';
+      } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+        errorMessage = 'Camera/microphone is being used by another application.';
+      } else if (error.name === 'OverconstrainedError') {
+        errorMessage = 'Camera does not support required settings.';
+      }
+      
+      set({ error: errorMessage, callStatus: 'idle' });
+      toast.error('Media Access Error', errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    if (!stream) {
+      throw new Error('Failed to get media stream');
+    }
+
+    const pc = new RTCPeerConnection(ICE_SERVERS);
+
+    // Add all tracks to peer connection
+    stream.getTracks().forEach(track => {
+      console.log('[WEBRTC] Adding track to peer connection:', {
+        kind: track.kind,
+        id: track.id,
+        enabled: track.enabled,
+      });
+      pc.addTrack(track, stream!);
+    });
+
+    // Handle incoming remote tracks - CRITICAL for video display
+    pc.ontrack = (event) => {
+      console.log('[WEBRTC] 📹 ontrack event received:', {
+        streams: event.streams?.length || 0,
+        track: event.track?.kind,
+        trackId: event.track?.id,
+        trackEnabled: event.track?.enabled,
+        trackReadyState: event.track?.readyState,
+        trackMuted: event.track?.muted,
+        trackLabel: event.track?.label,
+        receiver: event.receiver?.track?.kind,
+      });
+      
+      let remoteStream: MediaStream | null = null;
+      
+      if (event.streams && event.streams.length > 0) {
+        remoteStream = event.streams[0];
+        console.log('[WEBRTC] ✅ Received remote stream from streams array:', {
+          id: remoteStream.id,
+          active: remoteStream.active,
+          videoTracks: remoteStream.getVideoTracks().length,
+          audioTracks: remoteStream.getAudioTracks().length,
+          tracks: remoteStream.getTracks().map(t => ({ 
+            kind: t.kind, 
+            enabled: t.enabled, 
+            id: t.id,
+            readyState: t.readyState,
+            muted: t.muted,
+            label: t.label,
+          })),
+        });
+      } else if (event.track) {
+        // Fallback: create a stream from the track if streams array is empty
+        console.log('[WEBRTC] ⚠️ No streams array, creating stream from track');
+        remoteStream = new MediaStream([event.track]);
+        console.log('[WEBRTC] ✅ Created remote stream from track:', {
+          id: remoteStream.id,
+          active: remoteStream.active,
+          tracks: remoteStream.getTracks().length,
+        });
+      } else {
+        console.warn('[WEBRTC] ⚠️ ontrack event has no streams or tracks');
+        return;
+      }
+      
+      if (remoteStream) {
+        // CRITICAL: Verify video track exists and is enabled
+        const videoTracks = remoteStream.getVideoTracks();
+        const audioTracks = remoteStream.getAudioTracks();
+        
+        console.log('[WEBRTC] 📊 Remote stream analysis:', {
+          totalTracks: remoteStream.getTracks().length,
+          videoTracks: videoTracks.length,
+          audioTracks: audioTracks.length,
         });
         
-        if (event.streams && event.streams[0]) {
-          const stream = event.streams[0];
-          console.log('[WEBRTC] ✅ Setting remote stream:', {
-            id: stream.id,
-            active: stream.active,
-            tracks: stream.getTracks().map(t => ({ kind: t.kind, enabled: t.enabled, id: t.id })),
+        if (videoTracks.length > 0) {
+          const videoTrack = videoTracks[0];
+          console.log('[WEBRTC] 🎥 Remote video track verified:', {
+            enabled: videoTrack.enabled,
+            readyState: videoTrack.readyState,
+            muted: videoTrack.muted,
+            label: videoTrack.label,
+            settings: videoTrack.getSettings(),
+            constraints: videoTrack.getConstraints(),
           });
-          set({ remoteStream: stream });
-        } else if (event.track) {
-          // Fallback: create a stream from the track if streams array is empty
-          console.log('[WEBRTC] ⚠️ No streams array, creating stream from track');
-          const stream = new MediaStream([event.track]);
-          set({ remoteStream: stream });
+          
+          // CRITICAL: Ensure track is enabled
+          if (!videoTrack.enabled) {
+            console.warn('[WEBRTC] ⚠️ Remote video track is disabled, attempting to enable...');
+            videoTrack.enabled = true;
+          }
+          
+          // Monitor track state changes
+          videoTrack.onended = () => {
+            console.log('[WEBRTC] ⚠️ Remote video track ended');
+            // Update store to reflect track ended
+            set((state) => ({ remoteStream: state.remoteStream }));
+          };
+          
+          videoTrack.onmute = () => {
+            console.log('[WEBRTC] ⚠️ Remote video track muted');
+          };
+          
+          videoTrack.onunmute = () => {
+            console.log('[WEBRTC] ✅ Remote video track unmuted');
+            // Force update to trigger re-render
+            set((state) => ({ remoteStream: state.remoteStream }));
+          };
+          
+          // Monitor track state changes
+          videoTrack.addEventListener('ended', () => {
+            console.log('[WEBRTC] ⚠️ Remote video track ended (event listener)');
+          });
+          
+          videoTrack.addEventListener('mute', () => {
+            console.log('[WEBRTC] ⚠️ Remote video track muted (event listener)');
+          });
+          
+          videoTrack.addEventListener('unmute', () => {
+            console.log('[WEBRTC] ✅ Remote video track unmuted (event listener)');
+            set((state) => ({ remoteStream: state.remoteStream }));
+          });
+        } else {
+          console.warn('[WEBRTC] ⚠️ Remote stream has no video tracks - audio only or video disabled');
         }
-      };
+        
+        // CRITICAL: Set remote stream - this triggers VideoParticipant to display it
+        set({ remoteStream: remoteStream });
+        console.log('[WEBRTC] ✅ Remote stream set in store, should trigger video display');
+        
+        // Force a small delay to ensure React has time to update
+        setTimeout(() => {
+          const { remoteStream: currentStream } = get();
+          if (currentStream && remoteStream && currentStream.id === remoteStream.id) {
+            console.log('[WEBRTC] ✅ Remote stream confirmed in store after delay');
+          }
+        }, 100);
+      }
+    };
 
       pc.onicecandidate = (event) => {
         if (event.candidate) {
           const { socket: currentSocket, participants } = get();
           if (currentSocket && currentSocket.connected) {
-          participants.forEach(p => {
-              currentSocket.emit('signal:candidate', {
-              targetId: p.socketId,
-              candidate: event.candidate,
-            });
-          });
+            // Send to all existing participants
+            if (participants.length > 0) {
+              participants.forEach(p => {
+                console.log('[WEBRTC] 📤 Sending ICE candidate to:', p.socketId);
+                currentSocket.emit('signal:candidate', {
+                  targetId: p.socketId,
+                  candidate: event.candidate,
+                });
+              });
+            } else {
+              // No participants yet - store candidate to send later
+              // This is normal, candidates will be sent when participant joins
+              console.log('[WEBRTC] 📤 ICE candidate generated but no participants yet - will send when participant joins');
+            }
+          } else {
+            console.warn('[WEBRTC] ⚠️ Socket not connected, cannot send ICE candidate');
           }
+        } else {
+          // null candidate means end of candidates
+          console.log('[WEBRTC] ✅ All ICE candidates gathered');
         }
       };
 
@@ -807,22 +1148,6 @@ export const useCallStore = create<CallState>((set, get) => ({
           console.log('[JOIN] ⚠️ Call ended, not starting speech recognition');
         }
       }, 1000);
-    } catch (error: any) {
-      console.error('Media setup error:', error);
-      
-      let message = 'Failed to access camera/microphone';
-      if (error.name === 'NotAllowedError') {
-        message = 'Camera/microphone access denied. Please allow access in your browser settings.';
-      } else if (error.name === 'NotFoundError') {
-        message = 'No camera or microphone found. Please connect a device.';
-      } else if (error.name === 'NotReadableError') {
-        message = 'Camera/microphone is already in use by another application.';
-      }
-      
-      set({ error: message, callStatus: 'idle' });
-      toast.error('Media Error', message);
-      throw new Error(message);
-    }
   },
 
   leaveRoom: async () => {
@@ -917,16 +1242,38 @@ export const useCallStore = create<CallState>((set, get) => ({
   },
 
   toggleMute: () => {
-    const { localStream, isMuted, speechRecognition } = get();
+    const { localStream, speechRecognition, socket, roomId } = get();
     
-    if (localStream) {
-      localStream.getAudioTracks().forEach(track => {
-        track.enabled = isMuted;
-      });
+    if (!localStream) {
+      console.warn('[MUTE] No local stream available');
+      return;
     }
     
-    const newMutedState = !isMuted;
+    // Get actual track state (more reliable than store state)
+    const audioTracks = localStream.getAudioTracks();
+    if (audioTracks.length === 0) {
+      console.warn('[MUTE] No audio tracks available');
+      return;
+    }
+    
+    // Check current track state
+    const currentTrackEnabled = audioTracks[0].enabled;
+    const newMutedState = !currentTrackEnabled;
+    
+    // Update track state
+    audioTracks.forEach(track => {
+      track.enabled = newMutedState;
+      console.log('[MUTE] Track enabled set to:', track.enabled, 'track ID:', track.id);
+    });
+    
+    // Update store state to match track state
     set({ isMuted: newMutedState });
+    
+    // Notify other participants of audio state change
+    if (socket && roomId) {
+      socket.emit('participant:audio:toggle', { isMuted: newMutedState });
+      console.log('[MUTE] Emitted state change:', newMutedState);
+    }
     
     // Stop speech recognition when muted, restart when unmuted
     if (newMutedState) {
@@ -948,15 +1295,38 @@ export const useCallStore = create<CallState>((set, get) => ({
   },
 
   toggleVideo: () => {
-    const { localStream, isVideoOff } = get();
+    const { localStream, socket, roomId } = get();
     
-    if (localStream) {
-      localStream.getVideoTracks().forEach(track => {
-        track.enabled = isVideoOff;
-      });
+    if (!localStream) {
+      console.warn('[VIDEO] No local stream available');
+      return;
     }
     
-    set({ isVideoOff: !isVideoOff });
+    // Get actual track state (more reliable than store state)
+    const videoTracks = localStream.getVideoTracks();
+    if (videoTracks.length === 0) {
+      console.warn('[VIDEO] No video tracks available');
+      return;
+    }
+    
+    // Check current track state
+    const currentTrackEnabled = videoTracks[0].enabled;
+    const newVideoOff = !currentTrackEnabled;
+    
+    // Update track state
+    videoTracks.forEach(track => {
+      track.enabled = newVideoOff;
+      console.log('[VIDEO] Track enabled set to:', track.enabled, 'track ID:', track.id);
+    });
+    
+    // Update store state to match track state
+    set({ isVideoOff: newVideoOff });
+    
+    // Notify other participants of video state change
+    if (socket && roomId) {
+      socket.emit('participant:video:toggle', { isVideoOff: newVideoOff });
+      console.log('[VIDEO] Emitted state change:', newVideoOff);
+    }
   },
 
   sendTranscript: (text: string) => {

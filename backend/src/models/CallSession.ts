@@ -17,6 +17,7 @@ export interface ICallSession extends Document {
     audioOnly: boolean;
     recordingSize?: number;
     participantCount: number;
+    conversationId?: mongoose.Types.ObjectId; // Link to conversation/thread
   };
   createdAt: Date;
   updatedAt: Date;
@@ -79,6 +80,7 @@ const callSessionSchema = new Schema<ICallSession>(
       audioOnly: { type: Boolean, default: false },
       recordingSize: { type: Number, default: null },
       participantCount: { type: Number, default: 1 },
+      conversationId: { type: Schema.Types.ObjectId, ref: 'Conversation', default: null },
     },
   },
   {

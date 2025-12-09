@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { useAuthStore } from '../store/auth';
 import { useCallStore } from '../store/call';
+import GlobalSearch from '../components/GlobalSearch';
 
 export default function Home() {
   const navigate = useNavigate();
@@ -87,9 +88,17 @@ export default function Home() {
       if (response.ok) {
         const data = await response.json();
         setFriends(data.connections || []);
+      } else {
+        console.warn('Failed to fetch friends:', response.status, response.statusText);
       }
-    } catch (error) {
-      console.error('Fetch friends error:', error);
+    } catch (error: any) {
+      // Network error - backend might be down
+      if (error instanceof TypeError && error.message === 'Failed to fetch') {
+        console.warn('Fetch friends error: Backend server may not be running on', getApiUrl());
+        // Don't show error to user, just log it
+      } else {
+        console.error('Fetch friends error:', error);
+      }
     } finally {
       setFriendsLoading(false);
     }
@@ -169,7 +178,7 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen bg-dark-950 bg-animated">
+    <div className="min-h-screen bg-dark-950 bg-animated pb-16 md:pb-0">
       {/* Header */}
       <header className="sticky top-0 z-50 border-b border-dark-800 bg-dark-950/95 backdrop-blur-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -183,7 +192,8 @@ export default function Home() {
             </div>
 
             {/* Desktop Navigation */}
-            <div className="hidden md:flex items-center space-x-4">
+            <div className="hidden md:flex items-center space-x-4 flex-1 max-w-2xl mx-4">
+              <GlobalSearch />
               <Link
                 to="/messages"
                 className="flex items-center space-x-2 text-dark-400 hover:text-white transition px-3 py-2 rounded-lg hover:bg-dark-800/50"

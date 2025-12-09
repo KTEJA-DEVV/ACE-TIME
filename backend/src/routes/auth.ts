@@ -94,15 +94,14 @@ router.post(
     // Find user with timeout protection
     let user;
     try {
-      const findUserPromise = User.findOne({ email }).maxTimeMS(3000); // 3 second MongoDB timeout
-      const timeoutPromise = new Promise<null>((_, reject) => 
-        setTimeout(() => reject(new Error('Database query timeout')), 3000)
-      );
-      
-      user = await Promise.race([findUserPromise, timeoutPromise]);
+      user = await User.findOne({ email }).maxTimeMS(5000); // 5 second MongoDB timeout
     } catch (error: any) {
       console.error('[AUTH] Database query error:', error.message);
-      res.status(500).json({ error: 'Database error. Please try again.' });
+      if (error.message?.includes('timeout') || error.name === 'MongoServerSelectionError') {
+        res.status(503).json({ error: 'Database connection timeout. Please try again.' });
+      } else {
+        res.status(500).json({ error: 'Database error. Please try again.' });
+      }
       return;
     }
     
@@ -113,15 +112,10 @@ router.post(
     }
 
     console.log('[AUTH] User found, checking password...');
-    // Check password with timeout protection
+    // Check password
     let isMatch;
     try {
-      const comparePromise = user.comparePassword(password);
-      const timeoutPromise = new Promise<boolean>((_, reject) => 
-        setTimeout(() => reject(new Error('Password comparison timeout')), 3000)
-      );
-      
-      isMatch = await Promise.race([comparePromise, timeoutPromise]) as boolean;
+      isMatch = await user.comparePassword(password);
     } catch (error: any) {
       console.error('[AUTH] Password comparison error:', error.message);
       res.status(500).json({ error: 'Authentication error. Please try again.' });
@@ -208,17 +202,33 @@ router.get(
   '/verify',
   authenticate,
   asyncHandler(async (req: AuthRequest, res: Response) => {
-    const userResponse = {
-      _id: req.user!._id,
-      name: req.user!.name,
-      email: req.user!.email,
-      settings: req.user!.settings,
-    };
-    
-    res.json({
-      valid: true,
-      user: userResponse,
-    });
+    try {
+      if (!req.user) {
+        res.status(401).json({ 
+          valid: false,
+          error: 'User not found' 
+        });
+        return;
+      }
+
+      const userResponse = {
+        _id: req.user._id,
+        name: req.user.name,
+        email: req.user.email,
+        settings: req.user.settings,
+      };
+      
+      res.json({
+        valid: true,
+        user: userResponse,
+      });
+    } catch (error: any) {
+      console.error('[AUTH] Verify endpoint error:', error);
+      res.status(500).json({ 
+        valid: false,
+        error: 'Token verification failed' 
+      });
+    }
   })
 );
 

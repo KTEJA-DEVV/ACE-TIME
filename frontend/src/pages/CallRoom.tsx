@@ -1,11 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  Mic,
-  MicOff,
-  Video,
-  VideoOff,
-  PhoneOff,
   MessageSquare,
   Sparkles,
   Copy,
@@ -20,10 +15,20 @@ import {
   Clock,
   Smile,
   FileText,
+  Reply,
+  Forward,
+  AtSign,
 } from 'lucide-react';
 import { useAuthStore } from '../store/auth';
 import { useCallStore } from '../store/call';
 import { toast } from '../components/Toast';
+import PrivateChatOverlay from '../components/PrivateChatOverlay';
+import VideoParticipant from '../components/VideoParticipant';
+import AIParticipant from '../components/AIParticipant';
+import AINotesSidebar from '../components/AINotesSidebar';
+import CallControls from '../components/CallControls';
+import { AIThinking } from '../components/LoadingSpinner';
+import LoadingSpinner from '../components/LoadingSpinner';
 
 // Use relative URL in production (when served from backend), absolute URL in development
 const getApiUrl = () => {
@@ -78,6 +83,7 @@ export default function CallRoom() {
   const [callDuration, setCallDuration] = useState(0);
   const [copied, setCopied] = useState(false);
   const [activeRightTab, setActiveRightTab] = useState<RightTab>('transcript');
+  const [showAINotesSidebar, setShowAINotesSidebar] = useState(false);
   
   // Mobile responsive state
   const [showMobileControls, setShowMobileControls] = useState(true);
@@ -86,6 +92,7 @@ export default function CallRoom() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [isTablet, setIsTablet] = useState(window.innerWidth >= 768 && window.innerWidth < 1024);
   const [isLaptop, setIsLaptop] = useState(window.innerWidth >= 1024 && window.innerWidth < 1366);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
   
   // Dreamweaving tab state
   const [imagePrompt, setImagePrompt] = useState('');
@@ -114,7 +121,6 @@ export default function CallRoom() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [longPressTimer, setLongPressTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
-  const [hoveredUserName, setHoveredUserName] = useState<string | null>(null);
   const chatFileInputRef = useRef<HTMLInputElement>(null);
   
   // Private message notification state
@@ -132,6 +138,37 @@ export default function CallRoom() {
     senderId: string;
   } | null>(null);
   const bannerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  // Private chat overlay state (for during-call private chat)
+  const [showPrivateChatOverlay, setShowPrivateChatOverlay] = useState(false);
+  const [privateChatData, setPrivateChatData] = useState<{
+    conversationId: string;
+    targetUserId: string;
+    targetUserName: string;
+    initialContext?: string;
+  } | null>(null);
+  
+  // Track participant video/mute states for multi-participant view
+  const [participantStreams, setParticipantStreams] = useState<Map<string, {
+    stream: MediaStream | null;
+    isVideoOff: boolean;
+    isMuted: boolean;
+    userName: string;
+    userId?: string;
+    avatar?: string;
+  }>>(new Map());
+  const [longPressMenu, setLongPressMenu] = useState<{
+    messageId: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [participantNameMenu, setParticipantNameMenu] = useState<{
+    userId: string;
+    userName: string;
+    message?: typeof chatMessages[0];
+    x: number;
+    y: number;
+  } | null>(null);
 
   // Fetch historical transcript when callId is available
   const fetchHistoricalTranscript = async () => {
@@ -257,7 +294,10 @@ export default function CallRoom() {
   // Auto-scroll transcript
   useEffect(() => {
     if (transcriptRef.current && transcript.length > 0) {
-      transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
+      // Auto-scroll transcript to latest entry
+      if (transcriptRef.current) {
+        transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
+      }
     }
   }, [transcript]);
 
@@ -272,30 +312,163 @@ export default function CallRoom() {
     };
   }, [leaveRoom]);
 
-  // Set up video streams
+  // Set up video streams with smooth transitions (prevent glitches)
   useEffect(() => {
-    if (localVideoRef.current && localStream) {
+    if (localVideoRef.current && localStream && !isVideoOff) {
       console.log('[VIDEO] Setting local video stream');
-      localVideoRef.current.srcObject = localStream;
-      localVideoRef.current.play().catch((error) => {
+      const videoElement = localVideoRef.current;
+      // Only update if stream changed to prevent glitches
+      if (videoElement.srcObject !== localStream) {
+        videoElement.srcObject = localStream;
+      }
+      videoElement.play().catch((error) => {
         console.error('[VIDEO] Error playing local video:', error);
       });
-    } else if (localVideoRef.current && !localStream) {
-      localVideoRef.current.srcObject = null;
+    } else if (localVideoRef.current && (isVideoOff || !localStream)) {
+      // Smoothly clear video when turned off
+      if (localVideoRef.current.srcObject) {
+        localVideoRef.current.srcObject = null;
+      }
     }
-  }, [localStream]);
+  }, [localStream, isVideoOff]);
 
   useEffect(() => {
     if (remoteVideoRef.current && remoteStream) {
       console.log('[VIDEO] Setting remote video stream');
-      remoteVideoRef.current.srcObject = remoteStream;
-      remoteVideoRef.current.play().catch((error) => {
+      const videoElement = remoteVideoRef.current;
+      // Only update if stream changed to prevent glitches
+      if (videoElement.srcObject !== remoteStream) {
+        videoElement.srcObject = remoteStream;
+      }
+      videoElement.play().catch((error) => {
         console.error('[VIDEO] Error playing remote video:', error);
       });
     } else if (remoteVideoRef.current && !remoteStream) {
-      remoteVideoRef.current.srcObject = null;
+      if (remoteVideoRef.current.srcObject) {
+        remoteVideoRef.current.srcObject = null;
+      }
     }
   }, [remoteStream]);
+  
+  // Update participant streams when remote stream or participants change
+  useEffect(() => {
+    setParticipantStreams(prev => {
+      const updated = new Map(prev);
+      
+      // Track local user's stream
+      if (localStream && user) {
+        updated.set('local', {
+          stream: localStream,
+          isVideoOff: isVideoOff,
+          isMuted: isMuted,
+          userName: user.name || 'You',
+          userId: user._id,
+        });
+      }
+      
+      // Track remote participants' streams
+      if (remoteStream && participants.length > 0) {
+        // Assign remote stream to first participant (for 1-on-1 calls)
+        // For multiple participants, each would need their own peer connection
+        const firstParticipant = participants[0];
+        // Only update if we don't already have a stream for this participant
+        if (!updated.has(firstParticipant.socketId) || !updated.get(firstParticipant.socketId)?.stream) {
+          updated.set(firstParticipant.socketId, {
+            stream: remoteStream,
+            isVideoOff: false, // Will be updated via socket events
+            isMuted: false, // Will be updated via socket events
+            userName: firstParticipant.userName,
+            userId: firstParticipant.userId,
+          });
+        }
+      }
+      
+      // Initialize participant entries for all participants (even without streams yet)
+      participants.forEach(participant => {
+        if (!updated.has(participant.socketId)) {
+          updated.set(participant.socketId, {
+            stream: null,
+            isVideoOff: false,
+            isMuted: false,
+            userName: participant.userName,
+            userId: participant.userId,
+          });
+        }
+      });
+      
+      return updated;
+    });
+  }, [remoteStream, participants, localStream, user, isVideoOff, isMuted]);
+
+  // Listen for participant video/audio state changes
+  useEffect(() => {
+    const socket = callStore.socket;
+    if (!socket) return;
+
+    const handleVideoChanged = (data: {
+      socketId: string;
+      userId: string;
+      userName: string;
+      isVideoOff: boolean;
+    }) => {
+      setParticipantStreams(prev => {
+        const updated = new Map(prev);
+        const existing = updated.get(data.socketId);
+        if (existing) {
+          updated.set(data.socketId, {
+            ...existing,
+            isVideoOff: data.isVideoOff,
+          });
+        } else {
+          // Create entry if it doesn't exist
+          updated.set(data.socketId, {
+            stream: null,
+            isVideoOff: data.isVideoOff,
+            isMuted: false,
+            userName: data.userName,
+            userId: data.userId,
+          });
+        }
+        return updated;
+      });
+    };
+
+    const handleAudioChanged = (data: {
+      socketId: string;
+      userId: string;
+      userName: string;
+      isMuted: boolean;
+    }) => {
+      setParticipantStreams(prev => {
+        const updated = new Map(prev);
+        const existing = updated.get(data.socketId);
+        if (existing) {
+          updated.set(data.socketId, {
+            ...existing,
+            isMuted: data.isMuted,
+          });
+        } else {
+          // Create entry if it doesn't exist
+          updated.set(data.socketId, {
+            stream: null,
+            isVideoOff: false,
+            isMuted: data.isMuted,
+            userName: data.userName,
+            userId: data.userId,
+          });
+        }
+        return updated;
+      });
+    };
+
+    socket.on('participant:video:changed', handleVideoChanged);
+    socket.on('participant:audio:changed', handleAudioChanged);
+
+    return () => {
+      socket.off('participant:video:changed', handleVideoChanged);
+      socket.off('participant:audio:changed', handleAudioChanged);
+    };
+  }, [callStore.socket]);
 
   // Call duration timer - calculates from callStartTime for continuous duration
   useEffect(() => {
@@ -517,7 +690,10 @@ export default function CallRoom() {
               }];
             });
 
-            // Show banner notification
+            // Show toast notification
+            toast.info('New Private Message', `New private message from ${senderName}`);
+            
+            // Show banner notification immediately and prominently
             setCurrentBannerMessage({
               conversationId: messageConvId,
               senderName,
@@ -525,13 +701,16 @@ export default function CallRoom() {
             });
             setShowPrivateMessageBanner(true);
 
-            // Auto-dismiss after 5 seconds
+            // Play a subtle notification sound (optional - browser permission required)
+            // You can add a sound file if desired
+            
+            // Auto-dismiss after 8 seconds (longer for better visibility)
             if (bannerTimeoutRef.current) {
               clearTimeout(bannerTimeoutRef.current);
             }
             bannerTimeoutRef.current = setTimeout(() => {
               setShowPrivateMessageBanner(false);
-            }, 5000);
+            }, 8000);
           }
         }
       } catch (error) {
@@ -581,6 +760,71 @@ export default function CallRoom() {
   const handleEndCall = () => {
     endCall();
     navigate('/home');
+  };
+
+  // Handle screen share
+  const handleScreenShare = async () => {
+    try {
+      if (isScreenSharing) {
+        // Stop screen share
+        if (localStream) {
+          const screenTrack = localStream.getVideoTracks().find(track => track.label.includes('screen'));
+          if (screenTrack) {
+            screenTrack.stop();
+          }
+        }
+        setIsScreenSharing(false);
+        toast.success('Screen Share', 'Screen sharing stopped');
+      } else {
+        // Start screen share
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: true,
+        });
+        
+        // Replace video track in local stream
+        if (localStream) {
+          const videoTrack = screenStream.getVideoTracks()[0];
+          const sender = callStore.peerConnection?.getSenders().find(s => 
+            s.track && s.track.kind === 'video'
+          );
+          if (sender && videoTrack) {
+            await sender.replaceTrack(videoTrack);
+            localStream.removeTrack(localStream.getVideoTracks()[0]);
+            localStream.addTrack(videoTrack);
+          }
+        }
+        
+        setIsScreenSharing(true);
+        toast.success('Screen Share', 'Screen sharing started');
+        
+        // Stop screen share when user clicks stop in browser
+        screenStream.getVideoTracks()[0].onended = () => {
+          setIsScreenSharing(false);
+          handleScreenShare(); // Restore camera
+        };
+      }
+    } catch (error: any) {
+      console.error('Screen share error:', error);
+      toast.error('Screen Share', error.message || 'Failed to share screen');
+    }
+  };
+
+  // Handle add participant
+  const handleAddParticipant = () => {
+    // Copy room link to clipboard
+    const roomLink = `${window.location.origin}/call/${roomId}`;
+    navigator.clipboard.writeText(roomLink).then(() => {
+      toast.success('Link Copied', 'Room link copied to clipboard');
+    }).catch(() => {
+      toast.error('Error', 'Failed to copy link');
+    });
+  };
+
+  // Handle settings
+  const handleSettings = () => {
+    // Open settings modal or navigate to settings
+    toast.info('Settings', 'Settings panel coming soon');
   };
 
   const generateImage = async () => {
@@ -748,7 +992,14 @@ export default function CallRoom() {
     }
   };
 
-  const createPrivateBreakoutFromCall = async (message: typeof chatMessages[0], context?: string) => {
+  const createPrivateBreakoutFromCall = async (
+    targetUserId: string, 
+    targetUserName: string,
+    message?: typeof chatMessages[0], 
+    context?: string, 
+    openOverlay: boolean = false,
+    openInNewPage: boolean = true
+  ) => {
     if (!accessToken) {
       toast.error('Error', 'Please login to use private messages');
       return;
@@ -758,8 +1009,11 @@ export default function CallRoom() {
     // Otherwise, create direct private conversation
     try {
       let response;
+      const messageContext = message 
+        ? `Re: "${message.content.substring(0, 50)}${message.content.length > 50 ? '...' : ''}"`
+        : context || '';
 
-      if (callConversationId) {
+      if (callConversationId && message) {
         // Use breakout from call conversation
         response = await fetch(
           `${API_URL}/api/messages/conversations/${callConversationId}/breakout`,
@@ -770,9 +1024,11 @@ export default function CallRoom() {
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-              targetUserId: message.senderId._id,
+              targetUserId: targetUserId,
               originalMessageId: message._id,
-              context: context || `Re: "${message.content.substring(0, 50)}${message.content.length > 50 ? '...' : ''}"`,
+              context: messageContext,
+              originalConversationId: callConversationId,
+              groupName: 'Call Chat',
             }),
           }
         );
@@ -787,9 +1043,11 @@ export default function CallRoom() {
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-              targetUserId: message.senderId._id,
-              context: context || `Re: "${message.content.substring(0, 50)}${message.content.length > 50 ? '...' : ''}"`,
-              originalMessageId: message._id,
+              targetUserId: targetUserId,
+              context: messageContext,
+              originalMessageId: message?._id,
+              originalConversationId: callConversationId,
+              groupName: 'Call Chat',
             }),
           }
         );
@@ -798,16 +1056,36 @@ export default function CallRoom() {
       if (response.ok) {
         const data = await response.json();
         console.log('[PRIVATE] Conversation created/retrieved:', data.conversation._id);
-        // Navigate to dedicated Friend Chat page (WhatsApp-style)
+        
+        // Minimize call to background (FloatingCallOverlay will handle it)
+        minimizeCall();
+        
+        if (openOverlay) {
+          // Open overlay during call (WhatsApp-style)
+          setPrivateChatData({
+            conversationId: data.conversation._id,
+            targetUserId: targetUserId,
+            targetUserName: targetUserName,
+            initialContext: messageContext,
+          });
+          setShowPrivateChatOverlay(true);
+          setParticipantNameMenu(null); // Close menu
+        } else if (openInNewPage) {
+          // Navigate directly to dedicated Friend Chat page (WhatsApp-style)
+          // This opens immediately with the selected person, ready to type
         navigate(`/friends/chat/${data.conversation._id}`, {
-          state: { returnPath: `/call/${roomId}` },
-        });
-        toast.success('Private Chat', `Opened private conversation with ${message.senderId.name}`);
+            state: { 
+              returnPath: `/call/${roomId}`,
+              fromCall: true,
+              callRoomId: roomId,
+              initialMessage: messageContext, // Pre-populate input if context exists
+            },
+          });
+          toast.success('Private Chat', `Opened private conversation with ${targetUserName}`);
+        }
       } else {
         const errorData = await response.json().catch(() => ({}));
         console.error('[PRIVATE] Failed to create conversation:', errorData);
-        // Fallback: navigate to friends page
-        navigate('/friends');
         toast.error('Error', errorData.error || 'Failed to create private conversation');
       }
     } catch (error) {
@@ -816,19 +1094,57 @@ export default function CallRoom() {
     }
   };
 
+  const handleParticipantNameClick = (message: typeof chatMessages[0], e: React.MouseEvent | React.TouchEvent) => {
+    if (message.senderId._id === user?._id) return;
+    
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    
+    // Show popup menu
+    setParticipantNameMenu({
+      userId: message.senderId._id,
+      userName: message.senderId.name,
+      message: message,
+      x: clientX,
+      y: clientY,
+    });
+  };
+  
+  const handleReplyInPrivate = async () => {
+    if (!participantNameMenu) return;
+    
+    setParticipantNameMenu(null);
+    await createPrivateBreakoutFromCall(
+      participantNameMenu.userId,
+      participantNameMenu.userName,
+      participantNameMenu.message,
+      undefined,
+      false, // Don't open overlay
+      true   // Open in new page
+    );
+  };
 
-  const handleChatMouseDown = (message: typeof chatMessages[0]) => {
+
+  const handleChatMouseDown = (message: typeof chatMessages[0], e: React.MouseEvent | React.TouchEvent) => {
     if (message.senderId._id === user?._id) return;
 
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+
     const timer = setTimeout(() => {
-      handleChatMessageLongPress(message);
+      handleChatMessageLongPress(message, clientX, clientY);
     }, 500);
     setLongPressTimer(timer);
   };
 
-  const handleChatMessageLongPress = (message: typeof chatMessages[0]) => {
+  const handleChatMessageLongPress = (message: typeof chatMessages[0], x: number, y: number) => {
     if (message.senderId._id === user?._id) return;
-    createPrivateBreakoutFromCall(message);
+    // Show long-press menu
+    setLongPressMenu({
+      messageId: message._id,
+      x,
+      y,
+    });
   };
 
   const handleChatMouseUp = () => {
@@ -836,6 +1152,18 @@ export default function CallRoom() {
       clearTimeout(longPressTimer);
       setLongPressTimer(null);
     }
+  };
+  
+  const handleReplyPrivately = async (message: typeof chatMessages[0]) => {
+    setLongPressMenu(null);
+    await createPrivateBreakoutFromCall(
+      message.senderId._id,
+      message.senderId.name,
+      message,
+      undefined,
+      false,  // Don't open overlay
+      true    // Open in new page (direct navigation to chat)
+    );
   };
 
   // Helper to render tab content
@@ -940,7 +1268,7 @@ export default function CallRoom() {
                       if ((e.target as HTMLElement).closest('.user-name-clickable')) {
                         return;
                       }
-                      handleChatMouseDown(msg);
+                      handleChatMouseDown(msg, e);
                     }}
                     onMouseUp={handleChatMouseUp}
                     onMouseLeave={handleChatMouseUp}
@@ -950,7 +1278,7 @@ export default function CallRoom() {
                         return;
                       }
                       e.preventDefault();
-                      handleChatMouseDown(msg);
+                      handleChatMouseDown(msg, e);
                     }}
                     onTouchEnd={handleChatMouseUp}
                     onTouchCancel={handleChatMouseUp}
@@ -965,33 +1293,20 @@ export default function CallRoom() {
                     >
                       {msg.senderId._id !== user?._id && (
                         <div 
-                          className="user-name-clickable text-primary-400 text-xs mb-1 cursor-pointer hover:underline"
-                          onMouseEnter={() => setHoveredUserName(msg.senderId._id)}
-                          onMouseLeave={() => setHoveredUserName(null)}
-                          onClick={async (e) => {
+                          className="user-name-clickable text-primary-400 text-xs mb-1 cursor-pointer hover:underline relative group"
+                          onClick={(e) => {
                             e.stopPropagation();
                             e.preventDefault();
-                            // On tap, directly open private chat overlay
-                            console.log('[PRIVATE] Tapped on user name:', msg.senderId.name);
-                            await createPrivateBreakoutFromCall(msg);
+                            handleParticipantNameClick(msg, e);
                           }}
-                          onTouchEnd={async (e) => {
+                          onTouchEnd={(e) => {
                             e.stopPropagation();
                             e.preventDefault();
-                            // Also handle touch end for mobile (after touch start)
-                            console.log('[PRIVATE] Touch end on user name:', msg.senderId.name);
-                            await createPrivateBreakoutFromCall(msg);
+                            handleParticipantNameClick(msg, e);
                           }}
-                          onTouchStart={(e) => {
-                            e.stopPropagation();
-                            // Show visual feedback
-                            setHoveredUserName(msg.senderId._id);
-                          }}
+                          title="Tap to reply in private"
                         >
                           {msg.senderId.name}
-                          {hoveredUserName === msg.senderId._id && (
-                            <span className="ml-2 text-xs text-dark-400">(Tap to reply privately)</span>
-                          )}
                         </div>
                       )}
                       <p className="text-white text-sm">{msg.content}</p>
@@ -1088,76 +1403,79 @@ export default function CallRoom() {
                 ))
               )}
             </div>
-            <div className="p-4 border-t border-dark-800/50">
-              {selectedFiles.length > 0 && (
-                <div className="mb-2 flex flex-wrap gap-2">
-                  {selectedFiles.map((file, idx) => (
-                    <div key={idx} className="flex items-center space-x-2 bg-dark-800 rounded-lg p-2">
-                      {file.type.startsWith('image/') ? (
-                        <ImageIcon className="w-4 h-4 text-primary-400" />
-                      ) : (
-                        <Paperclip className="w-4 h-4 text-primary-400" />
-                      )}
-                      <span className="text-sm text-dark-300 truncate max-w-[150px]">{file.name}</span>
-                      <button
-                        onClick={() => setSelectedFiles(selectedFiles.filter((_, i) => i !== idx))}
-                        className="text-dark-500 hover:text-dark-300"
-                      >
-                        <X className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ))}
+            {/* Chat Input - Only show in Chat tab, with proper spacing to avoid overlap */}
+            {activeRightTab === 'chat' && (
+              <div className="p-4 border-t border-dark-800/50 bg-dark-900/95 backdrop-blur-sm">
+                {selectedFiles.length > 0 && (
+                  <div className="mb-2 flex flex-wrap gap-2">
+                    {selectedFiles.map((file, idx) => (
+                      <div key={idx} className="flex items-center space-x-2 bg-dark-800 rounded-lg p-2">
+                        {file.type.startsWith('image/') ? (
+                          <ImageIcon className="w-4 h-4 text-primary-400" />
+                        ) : (
+                          <Paperclip className="w-4 h-4 text-primary-400" />
+                        )}
+                        <span className="text-sm text-dark-300 truncate max-w-[150px]">{file.name}</span>
+                        <button
+                          onClick={() => setSelectedFiles(selectedFiles.filter((_, i) => i !== idx))}
+                          className="text-dark-500 hover:text-dark-300"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="flex items-center space-x-2">
+                  <input
+                    ref={chatFileInputRef}
+                    type="file"
+                    multiple
+                    onChange={handleChatFileSelect}
+                    className="hidden"
+                    accept="image/*,audio/*,.pdf,.doc,.docx"
+                  />
+                  <button
+                    onClick={() => chatFileInputRef.current?.click()}
+                    className="p-2 bg-dark-800/50 hover:bg-dark-700/50 rounded-lg transition"
+                    title="Attach file"
+                  >
+                    <Paperclip className="w-4 h-4 text-dark-400" />
+                  </button>
+                  <input
+                    type="text"
+                    value={newChatMessage}
+                    onChange={(e) => setNewChatMessage(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && !uploading && sendChatMessage()}
+                    placeholder="Type a message..."
+                    className="flex-1 px-3 py-2 bg-dark-800/50 border border-dark-700 rounded-lg text-white text-sm placeholder-dark-500 focus:outline-none focus:border-blue-500/50 glass-card"
+                    disabled={uploading}
+                  />
+                  <button
+                    onClick={sendChatMessage}
+                    disabled={uploading || (!newChatMessage.trim() && selectedFiles.length === 0)}
+                    className="p-2 bg-blue-500 hover:bg-blue-600 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {uploading ? (
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <Send className="w-4 h-4 text-white" />
+                    )}
+                  </button>
                 </div>
-              )}
-              <div className="flex items-center space-x-2">
-                <input
-                  ref={chatFileInputRef}
-                  type="file"
-                  multiple
-                  onChange={handleChatFileSelect}
-                  className="hidden"
-                  accept="image/*,audio/*,.pdf,.doc,.docx"
-                />
-                <button
-                  onClick={() => chatFileInputRef.current?.click()}
-                  className="p-2 bg-dark-800/50 hover:bg-dark-700/50 rounded-lg transition"
-                  title="Attach file"
-                >
-                  <Paperclip className="w-4 h-4 text-dark-400" />
-                </button>
-                <input
-                  type="text"
-                  value={newChatMessage}
-                  onChange={(e) => setNewChatMessage(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && !uploading && sendChatMessage()}
-                  placeholder="Type a message..."
-                  className="flex-1 px-3 py-2 bg-dark-800/50 border border-dark-700 rounded-lg text-white text-sm placeholder-dark-500 focus:outline-none focus:border-blue-500/50 glass-card"
-                  disabled={uploading}
-                />
-                <button
-                  onClick={sendChatMessage}
-                  disabled={uploading || (!newChatMessage.trim() && selectedFiles.length === 0)}
-                  className="p-2 bg-blue-500 hover:bg-blue-600 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {uploading ? (
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <Send className="w-4 h-4 text-white" />
-                  )}
-                </button>
               </div>
-            </div>
+            )}
           </div>
         );
       case 'transcript':
         return (
-          <div className="h-full flex flex-col overflow-y-auto">
-            <div className="px-4 py-3 border-b border-dark-800/50 flex items-center justify-between glass-card sticky top-0 z-10">
+          <div className="h-full flex flex-col overflow-hidden">
+            <div className="px-4 py-3 border-b border-dark-800/50 flex items-center justify-between glass-card sticky top-0 z-10 bg-dark-900/95 backdrop-blur-xl">
               <div className="flex items-center space-x-2">
                 <div className="w-7 h-7 bg-primary-500/20 rounded-lg flex items-center justify-center">
                   <MessageSquare className="w-4 h-4 text-primary-400" />
                 </div>
-                <span className="text-white font-semibold text-sm">Live Transcript</span>
+                <span className="text-white font-semibold text-sm md:text-base">Live Transcript</span>
               </div>
               <div className="flex items-center space-x-2">
                 {speechRecognition ? (
@@ -1178,12 +1496,11 @@ export default function CallRoom() {
                 )}
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto p-4 space-y-2" ref={transcriptRef}>
+            <div className="flex-1 overflow-y-auto p-4 space-y-3" ref={transcriptRef}>
               {transcript.length === 0 ? (
                 <div className="h-full flex items-center justify-center text-center">
                   <div>
-                    <MessageSquare className="w-12 h-12 text-dark-700 mx-auto mb-2" />
-                    <p className="text-dark-500 text-sm">Transcript will appear here as you speak...</p>
+                    <LoadingSpinner size="lg" text="Waiting for transcript..." />
                   </div>
                 </div>
               ) : (
@@ -1193,48 +1510,49 @@ export default function CallRoom() {
                     return (
                       <div 
                         key={index}
-                        className="animate-fade-in glass-card-hover rounded-lg p-3"
+                        className="animate-fade-in glass-card-hover rounded-lg p-3 md:p-4 border-l-4"
+                        style={{ borderLeftColor: isCurrentUser ? 'rgba(99, 102, 241, 0.6)' : 'rgba(59, 130, 246, 0.6)' }}
                       >
-                        <div className="flex items-center space-x-2 mb-1.5">
-                          <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
+                        <div className="flex items-center space-x-2 mb-2">
+                          <div className={`w-7 h-7 md:w-8 md:h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
                             isCurrentUser ? 'bg-primary-500/30' : 'bg-blue-500/30'
                           }`}>
-                            <span className={`font-semibold text-xs ${
+                            <span className={`font-semibold text-xs md:text-sm ${
                               isCurrentUser ? 'text-primary-400' : 'text-blue-400'
                             }`}>
                               {segment.speaker.charAt(0).toUpperCase()}
                             </span>
                           </div>
-                          <span className={`font-semibold text-xs ${
+                          <span className={`font-semibold text-sm md:text-base ${
                             isCurrentUser ? 'text-primary-400' : 'text-blue-400'
                           }`}>
                             {segment.speaker}
                           </span>
-                          <span className="text-dark-500 text-xs">
+                          <span className="text-dark-400 text-xs md:text-sm ml-auto flex-shrink-0">
                             {new Date(segment.timestamp).toLocaleTimeString([], {
                               hour: '2-digit',
                               minute: '2-digit',
                             })}
                           </span>
                         </div>
-                        <p className="text-dark-200 text-sm leading-relaxed pl-8">{segment.text}</p>
+                        <p className="text-white text-sm md:text-base leading-relaxed pl-9 md:pl-10">{segment.text}</p>
                       </div>
                     );
                   })}
                   {interimTranscript && (
-                    <div className="rounded-lg p-3 opacity-60">
-                      <div className="flex items-center space-x-2 mb-1.5">
-                        <div className="w-6 h-6 bg-primary-500/10 rounded-full flex items-center justify-center">
-                          <span className="text-primary-400/60 font-semibold text-xs">
+                    <div className="rounded-lg p-3 md:p-4 opacity-60 border-l-4 border-primary-500/30">
+                      <div className="flex items-center space-x-2 mb-2">
+                        <div className="w-7 h-7 md:w-8 md:h-8 bg-primary-500/10 rounded-full flex items-center justify-center flex-shrink-0">
+                          <span className="text-primary-400/60 font-semibold text-xs md:text-sm">
                             {user?.name?.charAt(0).toUpperCase() || 'Y'}
                           </span>
                         </div>
-                        <span className="text-primary-400/60 font-semibold text-xs">
+                        <span className="text-primary-400/60 font-semibold text-sm md:text-base">
                           {user?.name || 'You'}
                         </span>
-                        <span className="text-dark-600 text-xs italic">(speaking...)</span>
+                        <span className="text-dark-500 text-xs md:text-sm italic ml-auto flex-shrink-0">(speaking...)</span>
                       </div>
-                      <p className="text-dark-400 text-sm leading-relaxed pl-8 italic">{interimTranscript}</p>
+                      <p className="text-white/60 text-sm md:text-base leading-relaxed pl-9 md:pl-10 italic">{interimTranscript}</p>
                     </div>
                   )}
                 </>
@@ -1291,8 +1609,8 @@ export default function CallRoom() {
               </div>
             ) : (
               <div className="text-center py-8">
-                <Sparkles className="w-8 h-8 text-dark-700 mx-auto mb-2" />
-                <p className="text-dark-500 text-sm">AI notes will appear here as the conversation progresses...</p>
+                <AIThinking className="justify-center" />
+                <p className="text-dark-500 text-sm mt-4">AI notes will appear here as the conversation progresses...</p>
               </div>
             )}
           </div>
@@ -1404,53 +1722,135 @@ export default function CallRoom() {
     }
   };
 
-  return (
+      return (
     <div className="h-screen bg-dark-950 flex flex-col overflow-hidden">
+
+      {/* Private Message Notification Icon - Floating button (visible when there are unread messages) */}
+      {unreadPrivateMessages.length > 0 && !showPrivateChatOverlay && (
+        <div className="fixed top-20 right-4 z-50">
+          <button
+            onClick={() => {
+              const firstUnread = unreadPrivateMessages[0];
+              setPrivateChatData({
+                conversationId: firstUnread.conversationId,
+                targetUserId: firstUnread.senderId,
+                targetUserName: firstUnread.senderName,
+              });
+              setShowPrivateChatOverlay(true);
+              setUnreadPrivateMessages(prev =>
+                prev.filter(m => m.conversationId !== firstUnread.conversationId)
+              );
+            }}
+            className="bg-primary-500/90 hover:bg-primary-500 rounded-full p-3 shadow-lg hover:scale-110 transition-all animate-pulse flex items-center justify-center relative"
+            title={`${unreadPrivateMessages.length} new private message${unreadPrivateMessages.length > 1 ? 's' : ''}`}
+          >
+            <MessageSquare className="w-5 h-5 text-white" />
+            {unreadPrivateMessages.length > 1 && (
+              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center font-bold">
+                {unreadPrivateMessages.length > 9 ? '9+' : unreadPrivateMessages.length}
+              </span>
+            )}
+          </button>
+        </div>
+      )}
+      
       {/* MOBILE LAYOUT (< 768px) - WhatsApp Style */}
       {isMobile ? (
-        <div className="h-full relative">
-          {/* Full Screen Video */}
+        <div className="h-full relative overflow-hidden">
+          {/* Multi-Participant Video Grid - Mobile */}
           <div 
             className="absolute inset-0 bg-dark-900"
             onClick={handleVideoTap}
+            style={{ paddingTop: '48px', paddingBottom: '80px' }} // Space for tabs and controls
           >
-            {remoteStream ? (
-              <video
-                ref={remoteVideoRef}
-                autoPlay
-                playsInline
-                muted={false}
-                className="w-full h-full object-cover"
-              />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center">
-                {callStatus === 'waiting' ? (
-                  <div className="text-center px-4">
-                    <div className="w-24 h-24 bg-dark-800/50 rounded-full flex items-center justify-center mx-auto mb-4 glass-card">
-                      <Users className="w-12 h-12 text-dark-500" />
+            {/* Always show local video, even when alone */}
+            {(() => {
+              // Include AI as a participant (always present)
+              const totalParticipants = participants.length + 1 + 1; // +1 for local user, +1 for AI
+              let gridCols = '1fr';
+              let gridRows = '1fr';
+              
+              // Determine grid layout based on total participants (including AI)
+              if (totalParticipants === 1) {
+                // Just AI (shouldn't happen, but handle it)
+                gridCols = '1fr';
+                gridRows = '1fr';
+              } else if (totalParticipants === 2) {
+                // 1 human + AI
+                gridCols = 'repeat(2, 1fr)';
+                gridRows = '1fr';
+              } else if (totalParticipants === 3) {
+                // 2 humans + AI - Perfect 3-grid layout
+                gridCols = 'repeat(3, 1fr)';
+                gridRows = '1fr';
+              } else if (totalParticipants === 4) {
+                // 3 humans + AI
+                gridCols = 'repeat(2, 1fr)';
+                gridRows = 'repeat(2, 1fr)';
+              } else {
+                // 4+ humans + AI
+                gridCols = 'repeat(3, 1fr)';
+                gridRows = 'repeat(3, 1fr)';
+              }
+              
+              // Determine if AI is speaking or thinking
+              // AI is "speaking" when there's an interim transcript (AI is generating)
+              // AI is "thinking" when AI notes are being updated
+              const isAISpeaking = !!interimTranscript && interimTranscript.trim().length > 0;
+              const isAIThinking = !!aiNotes && !isAISpeaking;
+              
+              return (
+                <div className="w-full h-full grid gap-2 p-2 relative" style={{
+                  gridTemplateColumns: gridCols,
+                  gridTemplateRows: gridRows,
+                }}>
+                  {/* Remote participants */}
+                  {participants.map((participant) => {
+                    const participantData = participantStreams.get(participant.socketId);
+                    return (
+                      <VideoParticipant
+                        key={participant.socketId}
+                        stream={participantData?.stream || (participants.indexOf(participant) === 0 ? remoteStream : null)}
+                        userName={participant.userName}
+                        userId={participant.userId}
+                        isVideoOff={participantData?.isVideoOff || false}
+                        isMuted={participantData?.isMuted || false}
+                        className="min-h-0"
+                      />
+                    );
+                  })}
+                  
+                  {/* Local user (ALWAYS shown) */}
+                  <VideoParticipant
+                    stream={localStream}
+                    userName={user?.name || 'You'}
+                    userId={user?._id}
+                    avatar={user?.avatar}
+                    isVideoOff={isVideoOff}
+                    isMuted={isMuted}
+                    isLocal={true}
+                    className="min-h-0"
+                  />
+                  
+                  {/* AI Participant (ALWAYS shown as third participant) */}
+                  <AIParticipant
+                    isSpeaking={isAISpeaking}
+                    isThinking={isAIThinking}
+                    className="min-h-0"
+                  />
+                  
+                  {/* Waiting message overlay (only when alone with AI) - Moved up significantly to avoid button overlap */}
+                  {participants.length === 0 && (
+                    <div className="absolute bottom-32 md:bottom-36 left-1/2 transform -translate-x-1/2 bg-dark-900/90 backdrop-blur-lg rounded-full px-4 py-2.5 md:px-6 md:py-3 z-20 max-w-[90%] md:max-w-none">
+                      <p className="text-white text-sm md:text-base font-medium whitespace-nowrap">Waiting for others to join...</p>
+                      {roomId && (
+                        <p className="text-dark-400 text-xs md:text-sm mt-1 text-center truncate">Room: <span className="text-primary-400 font-mono">{roomId}</span></p>
+                      )}
                     </div>
-                    <p className="text-white text-xl font-medium mb-2">Waiting for others to join...</p>
-                    <p className="text-dark-400">Share the code: <span className="text-primary-400 font-mono">{roomId}</span></p>
-                  </div>
-                ) : (
-                  <div className="text-dark-400">Connecting...</div>
-                )}
-              </div>
-            )}
-
-            {/* Local Video PIP */}
-            {localStream && !isVideoOff && (
-              <div className="absolute top-4 right-4 w-32 aspect-video bg-dark-800 rounded-xl overflow-hidden shadow-xl border-2 border-dark-700 glass-card z-20">
-                <video
-                  ref={localVideoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="w-full h-full object-cover"
-                  style={{ transform: 'scaleX(-1)' }}
-                />
-              </div>
-            )}
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Top Left Info - Auto-hide */}
             <div className={`absolute top-4 left-4 z-30 transition-opacity duration-300 ${showMobileControls ? 'opacity-100' : 'opacity-0'}`}>
@@ -1458,51 +1858,40 @@ export default function CallRoom() {
                 <div className="flex items-center space-x-2">
                   <Clock className="w-4 h-4 text-white" />
                   <span className="text-white font-mono text-sm">{formatDuration(callDuration)}</span>
-                </div>
+            </div>
                 <div className="flex items-center space-x-2">
                   <Users className="w-4 h-4 text-white" />
                   <span className="text-white text-sm">{participants.length + 1}</span>
-                </div>
+        </div>
                 {isRecording && (
                   <div className="flex items-center space-x-1.5 mt-1 pt-1 border-t border-dark-700/50">
                     <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
                     <span className="text-red-400 text-xs font-medium">REC</span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Floating Call Controls - Sticky (Always Visible) */}
-            <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-50">
-              <div className="flex items-center space-x-3">
-                <button
-                  onClick={(e) => { e.stopPropagation(); toggleMute(); }}
-                  className={`w-14 h-14 rounded-full flex items-center justify-center transition-all active:scale-90 shadow-xl glass-card border-2 ${
-                    isMuted ? 'bg-red-500/90 border-red-400/50' : 'bg-dark-800/90 border-white/20'
-                  }`}
-                >
-                  {isMuted ? <MicOff className="w-6 h-6 text-white" /> : <Mic className="w-6 h-6 text-white" />}
-                </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); toggleVideo(); }}
-                  className={`w-14 h-14 rounded-full flex items-center justify-center transition-all active:scale-90 shadow-xl glass-card border-2 ${
-                    isVideoOff ? 'bg-red-500/90 border-red-400/50' : 'bg-dark-800/90 border-white/20'
-                  }`}
-                >
-                  {isVideoOff ? <VideoOff className="w-6 h-6 text-white" /> : <Video className="w-6 h-6 text-white" />}
-                </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleEndCall(); }}
-                  className="w-16 h-14 bg-red-500/90 border-2 border-red-400/50 rounded-full flex items-center justify-center transition-all active:scale-90 shadow-xl shadow-red-500/50 glass-card"
-                >
-                  <PhoneOff className="w-7 h-7 text-white" />
-                </button>
-              </div>
-            </div>
           </div>
+                )}
+        </div>
+      </div>
 
-          {/* Swipeable Top Tabs Bar */}
-          <div className="absolute top-0 left-0 right-0 z-20 glass-card border-b border-dark-800/50">
+            {/* Floating Call Controls - Mobile View - Only show in Dream tab (call view) */}
+            {activeRightTab === 'dreamweaving' && (
+              <div className={`fixed left-1/2 transform -translate-x-1/2 z-[60] bottom-8`}>
+                <CallControls
+                  isMuted={isMuted}
+                  isVideoOff={isVideoOff}
+                  onToggleMute={toggleMute}
+                  onToggleVideo={toggleVideo}
+                  onEndCall={handleEndCall}
+                  onScreenShare={handleScreenShare}
+                  onAddParticipant={handleAddParticipant}
+                  onSettings={handleSettings}
+                  isScreenSharing={isScreenSharing}
+                />
+              </div>
+            )}
+            </div>
+
+          {/* Swipeable Top Tabs Bar - Fixed at top */}
+          <div className="fixed top-0 left-0 right-0 z-20 glass-card border-b border-dark-800/50" style={{ height: '48px' }}>
             <div className="flex overflow-x-auto scrollbar-hide">
               {(['dreamweaving', 'chat', 'transcript', 'notes'] as RightTab[]).map((tab) => (
                 <button
@@ -1522,7 +1911,7 @@ export default function CallRoom() {
                     {tab === 'chat' && (
                       <div className="relative">
                         <MessageSquare className="w-4 h-4" />
-                        {unreadPrivateMessages.length > 0 && (
+                        {(unreadPrivateMessages.length > 0 || showPrivateChatOverlay) && (
                           <span className="absolute -top-1 -right-1 w-2 h-2 bg-primary-500 rounded-full animate-pulse" />
                         )}
                       </div>
@@ -1539,8 +1928,8 @@ export default function CallRoom() {
           {/* Private Message Notification Banner - Mobile */}
           {showPrivateMessageBanner && currentBannerMessage && (
             <div 
-              className="absolute left-4 right-4 z-50 animate-slide-down"
-              style={{ top: '56px' }}
+              className="fixed left-4 right-4 z-[100] animate-slide-down"
+              style={{ top: '16px' }}
             >
               <div
                 onClick={() => {
@@ -1548,30 +1937,33 @@ export default function CallRoom() {
                   if (bannerTimeoutRef.current) {
                     clearTimeout(bannerTimeoutRef.current);
                   }
-                  // Navigate to private chat while keeping call active in PIP
-                  minimizeCall();
-                  navigate(`/friends/chat/${currentBannerMessage.conversationId}`, {
-                    state: { returnPath: `/call/${roomId}` },
+                  // Open private chat overlay instead of navigating away
+                  // This keeps the call visible and active
+                  setPrivateChatData({
+                    conversationId: currentBannerMessage.conversationId,
+                    targetUserId: currentBannerMessage.senderId,
+                    targetUserName: currentBannerMessage.senderName,
                   });
+                  setShowPrivateChatOverlay(true);
                   // Clear unread for this conversation
                   setUnreadPrivateMessages(prev =>
                     prev.filter(m => m.conversationId !== currentBannerMessage.conversationId)
                   );
                 }}
-                className="glass-card rounded-xl p-4 border-2 border-primary-500/50 bg-gradient-to-r from-primary-500/20 to-primary-500/10 hover:from-primary-500/30 hover:to-primary-500/20 transition-all cursor-pointer flex items-center justify-between shadow-2xl backdrop-blur-md animate-fade-in"
+                className="glass-card rounded-xl p-4 border-2 border-primary-500/70 bg-gradient-to-r from-primary-500/30 via-primary-500/20 to-primary-500/10 hover:from-primary-500/40 hover:via-primary-500/30 hover:to-primary-500/20 transition-all cursor-pointer flex items-center justify-between shadow-2xl backdrop-blur-xl animate-fade-in hover:scale-[1.02] active:scale-[0.98] animate-pulse-slow"
                 style={{
-                  boxShadow: '0 10px 40px rgba(99, 102, 241, 0.3), 0 0 20px rgba(99, 102, 241, 0.2)',
+                  boxShadow: '0 10px 40px rgba(99, 102, 241, 0.4), 0 0 30px rgba(99, 102, 241, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)',
                 }}
               >
                 <div className="flex items-center space-x-3 flex-1 min-w-0">
-                  <div className="w-10 h-10 bg-primary-500/30 rounded-full flex items-center justify-center flex-shrink-0 animate-pulse">
-                    <MessageSquare className="w-5 h-5 text-primary-300" />
+                  <div className="w-12 h-12 bg-primary-500/40 rounded-full flex items-center justify-center flex-shrink-0 animate-pulse ring-2 ring-primary-500/50">
+                    <MessageSquare className="w-6 h-6 text-primary-200" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-white font-semibold text-sm truncate">
+                    <p className="text-white font-bold text-base truncate">
                       New private message from {currentBannerMessage.senderName}
                     </p>
-                    <p className="text-primary-300 text-xs mt-0.5">Tap to view and respond</p>
+                    <p className="text-primary-200 text-xs mt-1 font-medium">Tap to view and respond</p>
                   </div>
                 </div>
                 <button
@@ -1582,10 +1974,10 @@ export default function CallRoom() {
                       clearTimeout(bannerTimeoutRef.current);
                     }
                   }}
-                  className="ml-2 p-1.5 hover:bg-dark-800/70 rounded-lg transition flex-shrink-0"
+                  className="ml-3 p-2 hover:bg-dark-800/70 rounded-lg transition flex-shrink-0"
                   aria-label="Dismiss notification"
                 >
-                  <X className="w-4 h-4 text-dark-300 hover:text-white" />
+                  <X className="w-5 h-5 text-dark-300 hover:text-white" />
                 </button>
               </div>
             </div>
@@ -1598,7 +1990,9 @@ export default function CallRoom() {
                 className="fixed inset-0 bg-black/50 z-40"
                 onClick={() => setShowBottomSheet(false)}
               />
-              <div className="fixed bottom-0 left-0 right-0 z-50 bg-dark-950 rounded-t-3xl shadow-2xl border-t border-dark-800/50 max-h-[80vh] flex flex-col animate-slide-up">
+              <div className={`fixed bottom-0 left-0 right-0 z-50 bg-dark-950 rounded-t-3xl shadow-2xl border-t border-dark-800/50 flex flex-col animate-slide-up ${
+                isMobile ? 'h-[90vh]' : 'max-h-[80vh]'
+              }`}>
                 <div className="flex items-center justify-between p-4 border-b border-dark-800/50">
                   <h3 className="text-white font-semibold capitalize">
                     {activeRightTab === 'dreamweaving' ? 'Dreamweaving' : activeRightTab === 'transcript' ? 'Live Transcript' : activeRightTab}
@@ -1627,7 +2021,7 @@ export default function CallRoom() {
                 <div className="flex items-center space-x-2 bg-red-500/20 px-3 py-1.5 rounded-full border border-red-500/30">
                   <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
                   <span className="text-red-400 text-sm font-medium">REC</span>
-                </div>
+    </div>
               )}
               <div className="flex items-center space-x-2">
                 <Clock className="w-4 h-4 text-dark-400" />
@@ -1662,124 +2056,116 @@ export default function CallRoom() {
               isLaptop ? 'flex-1 min-w-[55%] max-w-[65%]' : 
               'flex-1 min-w-[50%]'
             }`}>
-          {/* Video/Audio Call View */}
-          <div className="flex-1 relative bg-dark-900 min-h-0">
-            {remoteStream ? (
-              <video
-                ref={remoteVideoRef}
-                autoPlay
-                playsInline
-                muted={false}
-                className="w-full h-full object-cover"
-                onLoadedMetadata={() => {
-                  console.log('[VIDEO] Remote video metadata loaded');
-                  if (remoteVideoRef.current) {
-                    remoteVideoRef.current.play().catch((error) => {
-                      console.error('[VIDEO] Error playing remote video after metadata:', error);
-                    });
-                  }
-                }}
-                onPlay={() => console.log('[VIDEO] Remote video playing')}
-                onError={(e) => console.error('[VIDEO] Remote video error:', e)}
-              />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center bg-dark-900">
-                {callStatus === 'waiting' ? (
-                  <div className="text-center px-4">
-                    <div className="w-32 h-32 bg-dark-800/50 rounded-full flex items-center justify-center mx-auto mb-6 glass-card border-2 border-dark-700/50">
-                      <Users className="w-16 h-16 text-dark-400" />
+          {/* Video/Audio Call View - Multi-Participant Grid */}
+          <div className="flex-1 relative bg-dark-900 min-h-0 overflow-hidden">
+            {/* Always show local video, even when alone */}
+            {(() => {
+              // Include AI as a participant (always present)
+              const totalParticipants = participants.length + 1 + 1; // +1 for local user, +1 for AI
+              let gridCols = '1fr';
+              let gridRows = '1fr';
+              
+              // Determine grid layout based on total participants (including AI)
+              if (totalParticipants === 1) {
+                // Just AI (shouldn't happen, but handle it)
+                gridCols = '1fr';
+                gridRows = '1fr';
+              } else if (totalParticipants === 2) {
+                // 1 human + AI
+                gridCols = 'repeat(2, 1fr)';
+                gridRows = '1fr';
+              } else if (totalParticipants === 3) {
+                // 2 humans + AI - Perfect 3-grid layout
+                gridCols = 'repeat(3, 1fr)';
+                gridRows = '1fr';
+              } else if (totalParticipants === 4) {
+                // 3 humans + AI
+                gridCols = 'repeat(2, 1fr)';
+                gridRows = 'repeat(2, 1fr)';
+              } else {
+                // 4+ humans + AI
+                gridCols = 'repeat(3, 1fr)';
+                gridRows = 'repeat(3, 1fr)';
+              }
+              
+              // Determine if AI is speaking or thinking
+              // AI is "speaking" when there's an interim transcript (AI is generating)
+              // AI is "thinking" when AI notes are being updated
+              const isAISpeaking = !!interimTranscript && interimTranscript.trim().length > 0;
+              const isAIThinking = !!aiNotes && !isAISpeaking;
+              
+              return (
+                <div className="w-full h-full grid gap-2 p-2 relative" style={{
+                  gridTemplateColumns: gridCols,
+                  gridTemplateRows: gridRows,
+                }}>
+                  {/* Remote participants */}
+                  {participants.map((participant) => {
+                    const participantData = participantStreams.get(participant.socketId);
+                    return (
+                      <VideoParticipant
+                        key={participant.socketId}
+                        stream={participantData?.stream || (participants.indexOf(participant) === 0 ? remoteStream : null)}
+                        userName={participant.userName}
+                        userId={participant.userId}
+                        isVideoOff={participantData?.isVideoOff || false}
+                        isMuted={participantData?.isMuted || false}
+                        className="min-h-0"
+                      />
+                    );
+                  })}
+                  
+                  {/* Local user (ALWAYS shown) */}
+                  <VideoParticipant
+                    stream={localStream}
+                    userName={user?.name || 'You'}
+                    userId={user?._id}
+                    avatar={user?.avatar}
+                    isVideoOff={isVideoOff}
+                    isMuted={isMuted}
+                    isLocal={true}
+                    className="min-h-0"
+                  />
+                  
+                  {/* AI Participant (ALWAYS shown as third participant) */}
+                  <AIParticipant
+                    isSpeaking={isAISpeaking}
+                    isThinking={isAIThinking}
+                    className="min-h-0"
+                  />
+                  
+                  {/* Waiting message overlay (only when alone with AI) - Moved up significantly to avoid button overlap */}
+                  {participants.length === 0 && (
+                    <div className="absolute bottom-32 md:bottom-36 left-1/2 transform -translate-x-1/2 bg-dark-900/90 backdrop-blur-lg rounded-full px-4 py-2.5 md:px-6 md:py-3 z-20 max-w-[90%] md:max-w-none">
+                      <p className="text-white text-sm md:text-base font-medium whitespace-nowrap">Waiting for others to join...</p>
+                      {roomId && (
+                        <p className="text-dark-400 text-xs md:text-sm mt-1 text-center truncate">Room: <span className="text-primary-400 font-mono">{roomId}</span></p>
+                      )}
                     </div>
-                    <p className="text-white text-2xl font-medium mb-3">Waiting for others to join...</p>
-                    <p className="text-dark-300 text-base">
-                      Share the code: <span className="text-primary-400 font-mono text-lg">{roomId}</span>
-                    </p>
-                  </div>
-                ) : (
-                  <div className="text-center">
-                    <div className="w-24 h-24 bg-dark-800/50 rounded-full flex items-center justify-center mx-auto mb-4 glass-card animate-pulse">
-                      <Users className="w-12 h-12 text-dark-400" />
-                    </div>
-                    <p className="text-dark-400 text-lg">Connecting...</p>
-                  </div>
-                )}
-              </div>
-            )}
+                  )}
+                </div>
+              );
+            })()}
 
-            {/* Local Video (PIP) - Responsive size */}
-            {localStream && !isVideoOff && (
-              <div className={`absolute top-4 right-4 aspect-video bg-dark-800 rounded-xl overflow-hidden shadow-xl border-2 border-dark-700 glass-card ${
-                isLaptop ? 'w-40' : 'w-48'
+            {/* Call Controls - Enhanced with animations and proper spacing - Only show in Dream tab (call view) */}
+            {activeRightTab === 'dreamweaving' && (
+              <div className={`z-[60] ${
+                isMobile ? 'fixed bottom-8 left-1/2 transform -translate-x-1/2' : 
+                'absolute bottom-8 left-1/2 transform -translate-x-1/2'
               }`}>
-                <video
-                  ref={localVideoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="w-full h-full object-cover"
-                  style={{ transform: 'scaleX(-1)' }}
-                  onLoadedMetadata={() => {
-                    console.log('[VIDEO] Local video metadata loaded');
-                    if (localVideoRef.current) {
-                      localVideoRef.current.play().catch((error) => {
-                        console.error('[VIDEO] Error playing local video after metadata:', error);
-                      });
-                    }
-                  }}
-                  onPlay={() => console.log('[VIDEO] Local video playing')}
-                  onError={(e) => console.error('[VIDEO] Local video error:', e)}
+                <CallControls
+                  isMuted={isMuted}
+                  isVideoOff={isVideoOff}
+                  onToggleMute={toggleMute}
+                  onToggleVideo={toggleVideo}
+                  onEndCall={handleEndCall}
+                  onScreenShare={handleScreenShare}
+                  onAddParticipant={handleAddParticipant}
+                  onSettings={handleSettings}
+                  isScreenSharing={isScreenSharing}
                 />
               </div>
             )}
-
-            {/* Call Controls - Sticky (Always Visible) - Positioned relative to video area on desktop */}
-            <div className={`flex items-center justify-center space-x-4 z-50 ${
-              isMobile ? 'fixed bottom-6 left-1/2 transform -translate-x-1/2' : 
-              'absolute bottom-6 left-1/2 transform -translate-x-1/2'
-            }`}>
-              <button
-                onClick={toggleMute}
-                className={`rounded-full flex items-center justify-center transition-all hover:scale-110 active:scale-95 shadow-xl glass-card border-2 ${
-                  isLaptop ? 'w-12 h-12' : 'w-14 h-14'
-                } ${
-                  isMuted 
-                    ? 'bg-red-500/90 hover:bg-red-600 shadow-red-500/50 border-red-400/50' 
-                    : 'bg-dark-800/90 hover:bg-dark-700 border-white/20'
-                }`}
-                title={isMuted ? 'Unmute' : 'Mute'}
-              >
-                {isMuted ? (
-                  <MicOff className={`text-white ${isLaptop ? 'w-5 h-5' : 'w-6 h-6'}`} />
-                ) : (
-                  <Mic className={`text-white ${isLaptop ? 'w-5 h-5' : 'w-6 h-6'}`} />
-                )}
-              </button>
-              <button
-                onClick={toggleVideo}
-                className={`rounded-full flex items-center justify-center transition-all hover:scale-110 active:scale-95 shadow-xl glass-card border-2 ${
-                  isLaptop ? 'w-12 h-12' : 'w-14 h-14'
-                } ${
-                  isVideoOff 
-                    ? 'bg-red-500/90 hover:bg-red-600 shadow-red-500/50 border-red-400/50' 
-                    : 'bg-dark-800/90 hover:bg-dark-700 border-white/20'
-                }`}
-                title={isVideoOff ? 'Turn on video' : 'Turn off video'}
-              >
-                {isVideoOff ? (
-                  <VideoOff className={`text-white ${isLaptop ? 'w-5 h-5' : 'w-6 h-6'}`} />
-                ) : (
-                  <Video className={`text-white ${isLaptop ? 'w-5 h-5' : 'w-6 h-6'}`} />
-                )}
-              </button>
-              <button
-                onClick={handleEndCall}
-                className={`bg-red-500/90 hover:bg-red-600 border-2 border-red-400/50 rounded-full flex items-center justify-center transition-all hover:scale-110 active:scale-95 shadow-xl shadow-red-500/50 glass-card ${
-                  isLaptop ? 'w-14 h-12' : 'w-16 h-14'
-                }`}
-                title="End call"
-              >
-                <PhoneOff className={`text-white ${isLaptop ? 'w-5 h-5' : 'w-6 h-6'}`} />
-              </button>
-            </div>
           </div>
         </div>
 
@@ -1829,37 +2215,41 @@ export default function CallRoom() {
 
               {/* Private Message Notification Banner - Desktop */}
               {showPrivateMessageBanner && currentBannerMessage && (
-                <div className="px-4 pt-2 z-50 animate-slide-down">
+                <div className="px-4 pt-2 z-[100] animate-slide-down">
                   <div
                     onClick={() => {
                       setShowPrivateMessageBanner(false);
                       if (bannerTimeoutRef.current) {
                         clearTimeout(bannerTimeoutRef.current);
                       }
-                      // Navigate to private chat while keeping call active in PIP
-                      minimizeCall();
-                      navigate(`/friends/chat/${currentBannerMessage.conversationId}`, {
-                        state: { returnPath: `/call/${roomId}` },
+                      // Open private chat overlay instead of navigating away
+                      // This keeps the call visible and active
+                      setPrivateChatData({
+                        conversationId: currentBannerMessage.conversationId,
+                        targetUserId: currentBannerMessage.senderId,
+                        targetUserName: currentBannerMessage.senderName,
                       });
+                      setShowPrivateChatOverlay(true);
                       // Clear unread for this conversation
                       setUnreadPrivateMessages(prev =>
                         prev.filter(m => m.conversationId !== currentBannerMessage.conversationId)
                       );
                     }}
-                    className="glass-card rounded-xl p-4 border-2 border-primary-500/50 bg-gradient-to-r from-primary-500/20 to-primary-500/10 hover:from-primary-500/30 hover:to-primary-500/20 transition-all cursor-pointer flex items-center justify-between shadow-2xl backdrop-blur-md animate-fade-in"
+                    className="glass-card rounded-xl p-4 border-2 border-primary-500/70 bg-gradient-to-r from-primary-500/30 via-primary-500/20 to-primary-500/10 hover:from-primary-500/40 hover:via-primary-500/30 hover:to-primary-500/20 transition-all cursor-pointer flex items-center justify-between shadow-2xl backdrop-blur-xl animate-fade-in hover:scale-[1.02] active:scale-[0.98]"
                     style={{
-                      boxShadow: '0 10px 40px rgba(99, 102, 241, 0.3), 0 0 20px rgba(99, 102, 241, 0.2)',
+                      boxShadow: '0 10px 40px rgba(99, 102, 241, 0.4), 0 0 30px rgba(99, 102, 241, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)',
+                      animation: 'slideDown 0.3s ease-out, pulse 2s ease-in-out infinite',
                     }}
                   >
                     <div className="flex items-center space-x-3 flex-1 min-w-0">
-                      <div className="w-10 h-10 bg-primary-500/30 rounded-full flex items-center justify-center flex-shrink-0 animate-pulse">
-                        <MessageSquare className="w-5 h-5 text-primary-300" />
+                      <div className="w-12 h-12 bg-primary-500/40 rounded-full flex items-center justify-center flex-shrink-0 animate-pulse ring-2 ring-primary-500/50">
+                        <MessageSquare className="w-6 h-6 text-primary-200" />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-white font-semibold text-sm truncate">
+                        <p className="text-white font-bold text-base truncate">
                           New private message from {currentBannerMessage.senderName}
                         </p>
-                        <p className="text-primary-300 text-xs mt-0.5">Tap to view and respond</p>
+                        <p className="text-primary-200 text-xs mt-1 font-medium">Click to view and respond</p>
                       </div>
                     </div>
                     <button
@@ -1870,10 +2260,10 @@ export default function CallRoom() {
                           clearTimeout(bannerTimeoutRef.current);
                         }
                       }}
-                      className="ml-2 p-1.5 hover:bg-dark-800/70 rounded-lg transition flex-shrink-0"
+                      className="ml-3 p-2 hover:bg-dark-800/70 rounded-lg transition flex-shrink-0"
                       aria-label="Dismiss notification"
                     >
-                      <X className="w-4 h-4 text-dark-300 hover:text-white" />
+                      <X className="w-5 h-5 text-dark-300 hover:text-white" />
                     </button>
                   </div>
                 </div>
@@ -1887,6 +2277,127 @@ export default function CallRoom() {
           </div>
         </>
       )}
+
+      {/* Participant Name Popup Menu */}
+      {participantNameMenu && (
+        <>
+          <div 
+            className="fixed inset-0 z-[99]"
+            onClick={() => setParticipantNameMenu(null)}
+          />
+          <div
+            className="fixed z-[100] bg-dark-800 border border-dark-700 rounded-xl shadow-2xl py-2 min-w-[200px] animate-fade-in"
+            style={{
+              left: `${Math.min(participantNameMenu.x, window.innerWidth - 220)}px`,
+              top: `${Math.min(participantNameMenu.y, window.innerHeight - 200)}px`,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-2 border-b border-dark-700/50">
+              <p className="text-white font-medium text-sm">{participantNameMenu.userName}</p>
+            </div>
+            <button
+              onClick={handleReplyInPrivate}
+              className="w-full px-4 py-3 flex items-center space-x-3 hover:bg-dark-700/50 transition text-left"
+            >
+              <Reply className="w-4 h-4 text-primary-400" />
+              <span className="text-white text-sm">Reply in private</span>
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* Long-Press Menu */}
+      {longPressMenu && (() => {
+        const message = chatMessages.find(m => m._id === longPressMenu.messageId);
+        if (!message || message.senderId._id === user?._id) return null;
+        
+        return (
+          <>
+            <div 
+              className="fixed inset-0 z-[99]"
+              onClick={() => setLongPressMenu(null)}
+            />
+            <div
+              className="fixed z-[100] bg-dark-800 border border-dark-700 rounded-xl shadow-2xl py-2 min-w-[200px]"
+              style={{
+                left: `${Math.min(longPressMenu.x, window.innerWidth - 220)}px`,
+                top: `${Math.min(longPressMenu.y, window.innerHeight - 200)}px`,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                onClick={() => handleReplyPrivately(message)}
+                className="w-full px-4 py-3 flex items-center space-x-3 hover:bg-dark-700/50 transition text-left"
+              >
+                <Reply className="w-4 h-4 text-primary-400" />
+                <span className="text-white text-sm">Reply in Private</span>
+              </button>
+              <button
+                onClick={() => {
+                  setNewChatMessage(`@${message.senderId.name} `);
+                  setLongPressMenu(null);
+                  toast.success('Mention', `Mentioning ${message.senderId.name}`);
+                }}
+                className="w-full px-4 py-3 flex items-center space-x-3 hover:bg-dark-700/50 transition text-left"
+              >
+                <AtSign className="w-4 h-4 text-blue-400" />
+                <span className="text-white text-sm">Mention</span>
+              </button>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(message.content);
+                  toast.success('Copied', 'Message copied to clipboard');
+                  setLongPressMenu(null);
+                }}
+                className="w-full px-4 py-3 flex items-center space-x-3 hover:bg-dark-700/50 transition text-left"
+              >
+                <Copy className="w-4 h-4 text-dark-400" />
+                <span className="text-white text-sm">Copy</span>
+              </button>
+              <button
+                onClick={() => {
+                  toast.info('Forward', 'Forward feature coming soon');
+                  setLongPressMenu(null);
+                }}
+                className="w-full px-4 py-3 flex items-center space-x-3 hover:bg-dark-700/50 transition text-left"
+              >
+                <Forward className="w-4 h-4 text-dark-400" />
+                <span className="text-white text-sm">Forward</span>
+              </button>
+            </div>
+          </>
+        );
+      })()}
+
+      {/* Private Chat Overlay (During Call) */}
+      {showPrivateChatOverlay && privateChatData && (
+        <PrivateChatOverlay
+          conversationId={privateChatData.conversationId}
+          targetUserId={privateChatData.targetUserId}
+          targetUserName={privateChatData.targetUserName}
+          initialContext={privateChatData.initialContext}
+          onClose={() => {
+            setShowPrivateChatOverlay(false);
+            setPrivateChatData(null);
+          }}
+        />
+      )}
+      
+      {/* Message Indicator Badge - Shows when private chat is active */}
+      {showPrivateChatOverlay && (
+        <div className="fixed top-16 right-4 z-[90] bg-primary-500 rounded-full p-2 shadow-lg animate-pulse">
+          <MessageSquare className="w-4 h-4 text-white" />
+        </div>
+      )}
+
+      {/* AI Notes Sidebar */}
+      <AINotesSidebar
+        aiNotes={aiNotes}
+        isOpen={showAINotesSidebar}
+        onToggle={() => setShowAINotesSidebar(!showAINotesSidebar)}
+        callTitle={`Call ${roomId ? `- ${roomId.substring(0, 8)}` : ''}`}
+      />
 
     </div>
   );

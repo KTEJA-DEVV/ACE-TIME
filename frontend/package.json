@@ -10,11 +10,15 @@
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
+    "clsx": "^2.1.1",
+    "emoji-picker-react": "^4.16.1",
+    "framer-motion": "^12.23.25",
     "lucide-react": "^0.294.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.20.1",
     "socket.io-client": "^4.7.2",
+    "tailwind-merge": "^3.4.0",
     "zustand": "^4.4.7"
   },
   "devDependencies": {
@@ -29,4 +33,3 @@
     "vite": "^5.0.7"
   }
 }
-

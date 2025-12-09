@@ -57,9 +57,39 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ error: null });
     
     try {
-      // Add timeout to prevent hanging
+      // First, check if backend is reachable with a quick health check
+      try {
+        const healthController = new AbortController();
+        const healthTimeout = setTimeout(() => healthController.abort(), 5000); // 5 second timeout for health check
+        
+        const healthResponse = await fetch(`${API_URL}/health`, {
+          method: 'GET',
+          signal: healthController.signal,
+        }).catch(() => null);
+        
+        clearTimeout(healthTimeout);
+        
+        if (!healthResponse || !healthResponse.ok) {
+          const message = `Unable to connect to backend server at ${API_URL}. Please ensure the backend is running.`;
+          set({ error: message });
+          toast.error('Connection Error', message);
+          throw new Error(message);
+        }
+      } catch (healthError: any) {
+        // If health check fails, provide helpful error message
+        if (healthError.name === 'AbortError' || healthError instanceof TypeError) {
+          const message = `Backend server at ${API_URL} is not responding. Please check if the backend is running on port 3001.`;
+          set({ error: message });
+          toast.error('Backend Unavailable', message);
+          throw new Error(message);
+        }
+        // If it's the error we just threw, re-throw it
+        throw healthError;
+      }
+      
+      // Add timeout to prevent hanging (increased to 30 seconds for slow connections)
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
       
       const response = await fetch(`${API_URL}/api/auth/login`, {
         method: 'POST',
@@ -113,7 +143,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch (error: any) {
       // Abort error (timeout)
       if (error.name === 'AbortError') {
-        const message = 'Request timed out. Please check if the backend is running.';
+        const message = `Request timed out after 30 seconds. The backend at ${API_URL} may be slow or unresponsive. Please try again or check if the backend is running.`;
         set({ error: message });
         toast.error('Timeout Error', message);
         throw new Error(message);
@@ -121,13 +151,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       
       // Network error
       if (error instanceof TypeError && error.message === 'Failed to fetch') {
-        const message = 'Unable to connect to server. Please check if the backend is running on port 3001.';
+        const message = `Unable to connect to server at ${API_URL}. Please check if the backend is running on port 3001.`;
         set({ error: message });
         toast.error('Connection Error', message);
         throw new Error(message);
       }
       
-      // Re-throw other errors
+      // Re-throw other errors (including our custom errors from health check)
+      if (error.message) {
+        set({ error: error.message });
+        throw error;
+      }
+      
+      // Fallback for unknown errors
       set({ error: error.message || 'Login failed. Please try again.' });
       throw error;
     }
@@ -137,11 +173,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ error: null });
     
     try {
+      // Add timeout to prevent hanging
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+      
       const response = await fetch(`${API_URL}/api/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, email, password }),
+        signal: controller.signal,
       });
+      
+      clearTimeout(timeoutId);
 
       // Handle empty or non-JSON responses
       let data;
@@ -184,13 +227,28 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       toast.success('Account created!', `Welcome to AceTime, ${data.user.name}`);
     } catch (error: any) {
+      // Abort error (timeout)
+      if (error.name === 'AbortError') {
+        const message = `Request timed out after 30 seconds. The backend at ${API_URL} may be slow or unresponsive. Please try again or check if the backend is running.`;
+        set({ error: message });
+        toast.error('Timeout Error', message);
+        throw new Error(message);
+      }
+      
       // Network error
       if (error instanceof TypeError && error.message === 'Failed to fetch') {
-        const message = 'Unable to connect to server. Please try again.';
+        const message = `Unable to connect to server at ${API_URL}. Please check if the backend is running on port 3001.`;
         set({ error: message });
         toast.error('Connection Error', message);
         throw new Error(message);
       }
+      
+      // Re-throw other errors
+      if (error.message) {
+        set({ error: error.message });
+        throw error;
+      }
+      
       throw error;
     }
   },
@@ -249,9 +307,23 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             });
             return;
           }
-        } catch (verifyError) {
+        } catch (verifyError: any) {
+          // Network error - backend might be down
+          if (verifyError instanceof TypeError && verifyError.message === 'Failed to fetch') {
+            console.warn('Token verification failed: Backend server may not be running');
+            // Assume token is valid for now, but set a flag
+            set({
+              user,
+              accessToken,
+              refreshToken,
+              isAuthenticated: true,
+              isLoading: false,
+              error: 'Backend server connection failed. Some features may not work.',
+            });
+            return;
+          }
           console.error('Token verification failed:', verifyError);
-          // Network error, assume token is valid for now
+          // Other errors - assume token is valid for now
         }
         
         set({

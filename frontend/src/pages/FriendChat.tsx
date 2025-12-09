@@ -10,10 +10,15 @@ import {
   MoreVertical,
   Paperclip,
   Loader2,
-  RefreshCw,
+  Check,
 } from 'lucide-react';
 import { useAuthStore } from '../store/auth';
+import { useCallStore } from '../store/call';
 import { toast } from '../components/Toast';
+import { Skeleton, SkeletonMessage } from '../components/Skeleton';
+import ErrorState from '../components/ErrorState';
+import { UploadProgress } from '../components/ProgressBar';
+import MessageReactions from '../components/MessageReactions';
 
 const getApiUrl = () => {
   if (import.meta.env.VITE_API_URL) {
@@ -46,6 +51,15 @@ interface Message {
   createdAt: string;
   conversationId?: string;
   attachments?: Array<{ type: string; url: string; name?: string }>;
+  reactions?: Array<{ emoji: string; userId: string | { _id: string } }>;
+  readBy?: Array<string | { _id: string }>;
+  metadata?: {
+    originalMessageId?: string;
+    originalConversationId?: string;
+    groupName?: string;
+    isContext?: boolean;
+    isPrivateReply?: boolean;
+  };
 }
 
 interface Conversation {
@@ -66,7 +80,7 @@ export default function FriendChat() {
   
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [newMessage, setNewMessage] = useState('');
+  const [newMessage, setNewMessage] = useState(location.state?.initialMessage || '');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,11 +90,28 @@ export default function FriendChat() {
   const socketRef = useRef<Socket | null>(null);
   const conversationIdRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
 
   // Get return path from location state (for returning to call)
   const returnPath = location.state?.returnPath || '/friends';
+  const fromCall = location.state?.fromCall || false;
+  const callRoomId = location.state?.callRoomId;
+  
+  // Ensure call stays alive when navigating from a call
+  // This is critical: the call should continue in the background via FloatingCallOverlay
+  const { callStatus, isMinimized, minimizeCall, roomId } = useCallStore();
+  
+  // If we came from a call and call is active, ensure it's minimized (kept alive)
+  useEffect(() => {
+    // Check if we're coming from a call and the call is still active
+    if (fromCall && (callRoomId || roomId) && (callStatus === 'active' || callStatus === 'waiting') && !isMinimized) {
+      console.log('[FRIEND CHAT] 📞 Minimizing active call to keep it alive during private chat');
+      console.log('[FRIEND CHAT] Call will continue in background via FloatingCallOverlay');
+      minimizeCall();
+    }
+  }, [fromCall, callRoomId, roomId, callStatus, isMinimized, minimizeCall]);
 
   // Auto-scroll to bottom
   const scrollToBottom = useCallback(() => {
@@ -91,9 +122,19 @@ export default function FriendChat() {
     scrollToBottom();
   }, [messages, scrollToBottom]);
 
+  // Auto-focus input when conversation loads (for immediate typing)
+  useEffect(() => {
+    if (conversation && !loading && inputRef.current) {
+      // Small delay to ensure UI is ready
+      setTimeout(() => {
+        inputRef.current?.focus();
+      }, 300);
+    }
+  }, [conversation, loading]);
+
   // Fetch messages from server
   const fetchMessages = useCallback(async (convId: string) => {
-    if (!accessToken) return;
+    if (!accessToken || !user) return;
     try {
       const response = await fetch(
         `${API_URL}/api/messages/conversations/${convId}/messages`,
@@ -105,13 +146,32 @@ export default function FriendChat() {
       if (response.ok) {
         const data = await response.json();
         setMessages(data.messages || []);
+        
+        // Mark unread messages as read
+        if (data.messages && data.messages.length > 0 && user?._id) {
+          const unreadMessages = data.messages.filter((m: Message) => 
+            m.senderId?._id && m.senderId._id !== user._id && 
+            (!m.readBy || !m.readBy.some((id: any) => {
+              const idStr = typeof id === 'string' ? id : id?._id || id?.toString();
+              return idStr === user._id.toString();
+            }))
+          );
+          
+          // Mark as read in background (don't block UI)
+          unreadMessages.forEach((msg: Message) => {
+            fetch(`${API_URL}/api/messages/conversations/${convId}/messages/${msg._id}/read`, {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${accessToken}` },
+            }).catch(err => console.error('[FRIEND CHAT] Mark read error:', err));
+          });
+        }
       } else {
         console.error('[FRIEND CHAT] Failed to fetch messages');
       }
     } catch (error) {
       console.error('Fetch messages error:', error);
     }
-  }, [accessToken]);
+  }, [accessToken, user]);
 
   // Initialize Socket.IO connection
   useEffect(() => {
@@ -168,8 +228,17 @@ export default function FriendChat() {
     socket.on('message:new', (data: { message: Message }) => {
       console.log('[FRIEND CHAT] 📩 Received new message:', data.message._id);
       
-      const msgConvId = data.message.conversationId;
-      if (msgConvId === conversationIdRef.current) {
+      // Handle both string and object conversationId formats
+      let msgConvId: string | undefined;
+      if (typeof data.message.conversationId === 'string') {
+        msgConvId = data.message.conversationId;
+      } else if (data.message.conversationId && typeof data.message.conversationId === 'object') {
+        msgConvId = (data.message.conversationId as any)?._id?.toString() || (data.message.conversationId as any)?.toString();
+      }
+      
+      const currentConvId = conversationIdRef.current;
+      
+      if (msgConvId && currentConvId && msgConvId.toString() === currentConvId.toString()) {
         setMessages((prev) => {
           // Prevent duplicates
           const exists = prev.some((m) => m._id === data.message._id);
@@ -177,9 +246,11 @@ export default function FriendChat() {
             console.log('[FRIEND CHAT] Message already exists, skipping');
             return prev;
           }
-          console.log('[FRIEND CHAT] Adding new message to state');
+          console.log('[FRIEND CHAT] ✅ Adding new message to state');
           return [...prev, data.message];
         });
+      } else {
+        console.log('[FRIEND CHAT] ⚠️ Message for different conversation:', msgConvId, 'vs', currentConvId);
       }
     });
 
@@ -223,12 +294,22 @@ export default function FriendChat() {
           if (response.ok) {
             const data = await response.json();
             convId = data.conversation._id;
-            const otherParticipant = data.conversation.participants.find(
-              (p: any) => p._id.toString() !== user._id
+            const otherParticipant = data.conversation.participants?.find(
+              (p: any) => p?._id?.toString() !== user?._id?.toString()
             );
+            
+            if (!otherParticipant) {
+              throw new Error('Could not find other participant in conversation');
+            }
+            
             convData = {
               _id: data.conversation._id,
-              otherParticipant,
+              otherParticipant: {
+                _id: otherParticipant._id,
+                name: otherParticipant.name || 'Unknown',
+                email: otherParticipant.email || '',
+                avatar: otherParticipant.avatar,
+              },
             };
             console.log('[FRIEND CHAT] Conversation created/retrieved:', convId);
           } else {
@@ -245,32 +326,44 @@ export default function FriendChat() {
 
           if (response.ok) {
             const data = await response.json();
-            const otherParticipant = data.conversation.participants.find(
-              (p: any) => p._id.toString() !== user._id
+            const otherParticipant = data.conversation.participants?.find(
+              (p: any) => p?._id?.toString() !== user?._id?.toString()
             );
+            
+            if (!otherParticipant) {
+              throw new Error('Could not find other participant in conversation');
+            }
+            
             convData = {
               _id: data.conversation._id,
-              otherParticipant,
+              otherParticipant: {
+                _id: otherParticipant._id,
+                name: otherParticipant.name || 'Unknown',
+                email: otherParticipant.email || '',
+                avatar: otherParticipant.avatar,
+              },
             };
           } else {
             throw new Error('Conversation not found');
           }
         }
 
-        if (convId && convData) {
+        if (convId && convData && convData.otherParticipant) {
           conversationIdRef.current = convId;
           setConversation(convData);
           
-          // Fetch messages
+          // Fetch messages (this will show chat history if any exists)
           await fetchMessages(convId);
           
           // Join conversation room for real-time updates
           if (socketRef.current?.connected) {
-            console.log('[FRIEND CHAT] Joining conversation room:', convId);
+            console.log('[FRIEND CHAT] ✅ Joining conversation room:', convId);
             socketRef.current.emit('conversation:join', convId);
+          } else {
+            console.warn('[FRIEND CHAT] ⚠️ Socket not connected, will join when connected');
           }
         } else {
-          throw new Error('Could not initialize conversation');
+          throw new Error('Could not initialize conversation - missing data');
         }
       } catch (err: any) {
         console.error('[FRIEND CHAT] Error initializing conversation:', err);
@@ -371,7 +464,7 @@ export default function FriendChat() {
   };
 
   const handleStartCall = async (video: boolean = true) => {
-    if (!accessToken || !user || !conversation?.otherParticipant) return;
+    if (!accessToken || !user || !conversation?.otherParticipant?._id) return;
 
     try {
       const response = await fetch(`${API_URL}/api/rooms`, {
@@ -382,17 +475,25 @@ export default function FriendChat() {
         },
         body: JSON.stringify({
           audioOnly: !video,
-          participants: [conversation.otherParticipant._id],
+          participants: [conversation.otherParticipant._id.toString()],
+          conversationId: conversationIdRef.current, // Link call to conversation
         }),
       });
 
       if (response.ok) {
         const data = await response.json();
+        // Navigate to call with return path to this conversation
         navigate(`/call/${data.roomId}`, { 
-          state: { returnPath: `/friends/chat/${conversationIdRef.current}` } 
+          state: { 
+            returnPath: `/friends/chat/${conversationIdRef.current}`,
+            conversationId: conversationIdRef.current,
+            fromPrivateChat: true,
+          } 
         });
+        toast.success('Call Started', 'Starting call with transcription and recording...');
       } else {
-        toast.error('Error', 'Failed to start call');
+        const errorData = await response.json().catch(() => ({}));
+        toast.error('Error', errorData.error || 'Failed to start call');
       }
     } catch (error) {
       console.error('Start call error:', error);
@@ -405,50 +506,101 @@ export default function FriendChat() {
     setSelectedFiles((prev) => [...prev, ...files]);
   };
 
-  const handleRetry = () => {
-    setError(null);
-    setLoading(true);
-    // Trigger re-initialization
-    window.location.reload();
+  // Handle emoji reaction
+  const handleReaction = async (messageId: string, emoji: string) => {
+    if (!accessToken || !conversationIdRef.current) return;
+
+    try {
+      const response = await fetch(
+        `${API_URL}/api/messages/conversations/${conversationIdRef.current}/messages/${messageId}/reaction`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ emoji }),
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        // Update message in local state
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg._id === messageId
+              ? { ...msg, reactions: data.message.reactions || [] }
+              : msg
+          )
+        );
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        toast.error('Error', errorData.error || 'Failed to add reaction');
+      }
+    } catch (error) {
+      console.error('Reaction error:', error);
+      toast.error('Error', 'Failed to add reaction');
+    }
+  };
+
+  // Handle remove reaction (same endpoint, toggles)
+  const handleRemoveReaction = async (messageId: string, emoji: string) => {
+    // Same as handleReaction - the backend toggles
+    handleReaction(messageId, emoji);
   };
 
   // Loading state
   if (loading) {
     return (
-      <div className="min-h-screen bg-dark-950 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary-500"></div>
-          <p className="text-dark-400 text-sm">Loading conversation...</p>
+      <div className="min-h-screen bg-dark-950 flex flex-col pb-16 md:pb-0">
+        <header className="sticky top-0 z-50 bg-dark-900 border-b border-dark-800/50">
+          <div className="flex items-center justify-between px-4 py-3">
+            <div className="flex items-center space-x-3 flex-1">
+              <Skeleton variant="circular" width={40} height={40} />
+              <div className="flex-1 space-y-2">
+                <Skeleton variant="text" width="150px" height={16} />
+                <Skeleton variant="text" width="80px" height={12} />
+              </div>
+            </div>
+            <Skeleton variant="circular" width={40} height={40} />
+            <Skeleton variant="circular" width={40} height={40} />
+            <Skeleton variant="circular" width={40} height={40} />
+          </div>
+        </header>
+        <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <SkeletonMessage key={i} className={i % 2 === 0 ? '' : 'flex-row-reverse'} />
+          ))}
+        </div>
+        <div className="sticky bottom-0 bg-dark-900 border-t border-dark-800/50 p-3">
+          <Skeleton variant="rounded" height={44} />
         </div>
       </div>
     );
   }
 
-  // Error state
   if (error) {
     return (
-      <div className="min-h-screen bg-dark-950 flex items-center justify-center">
-        <div className="text-center px-6">
-          <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-            <MessageSquare className="w-8 h-8 text-red-400" />
-          </div>
-          <h3 className="text-white font-semibold text-lg mb-2">Something went wrong</h3>
-          <p className="text-dark-400 text-sm mb-6">{error}</p>
-          <div className="flex gap-3 justify-center">
-            <button
-              onClick={() => navigate(returnPath)}
-              className="px-4 py-2 bg-dark-800 hover:bg-dark-700 rounded-lg text-white transition"
-            >
-              Go Back
-            </button>
-            <button
-              onClick={handleRetry}
-              className="px-4 py-2 bg-primary-500 hover:bg-primary-600 rounded-lg text-white flex items-center gap-2 transition"
-            >
-              <RefreshCw className="w-4 h-4" />
-              Retry
-            </button>
-          </div>
+      <div className="min-h-screen bg-dark-950 flex flex-col pb-16 md:pb-0">
+        <header className="sticky top-0 z-50 bg-dark-900 border-b border-dark-800/50 px-4 py-3">
+          <button
+            onClick={() => navigate(returnPath)}
+            className="p-2 rounded-lg hover:bg-dark-800/50 transition"
+          >
+            <ArrowLeft className="w-5 h-5 text-white" />
+          </button>
+        </header>
+        <div className="flex-1">
+          <ErrorState
+            title="Failed to load conversation"
+            message={error}
+            onRetry={() => {
+              setError(null);
+              setLoading(true);
+              // Retry logic will be handled by useEffect
+            }}
+            variant="default"
+          />
         </div>
       </div>
     );
@@ -473,14 +625,22 @@ export default function FriendChat() {
   }
 
   return (
-    <div className="min-h-screen bg-dark-950 flex flex-col">
+    <div className="min-h-screen bg-dark-950 flex flex-col pb-16 md:pb-0">
       {/* Header - WhatsApp style */}
       <header className="sticky top-0 z-50 bg-dark-900 border-b border-dark-800/50">
         <div className="flex items-center justify-between px-4 py-3">
           <div className="flex items-center space-x-3 flex-1 min-w-0">
             <button
-              onClick={() => navigate(returnPath)}
+              onClick={() => {
+                if (fromCall && callRoomId) {
+                  // Return to call
+                  navigate(`/call/${callRoomId}`);
+                } else {
+                  navigate(returnPath);
+                }
+              }}
               className="p-2 rounded-lg hover:bg-dark-800/50 transition"
+              title={fromCall ? 'Return to call' : 'Go back'}
             >
               <ArrowLeft className="w-5 h-5 text-white" />
             </button>
@@ -506,7 +666,12 @@ export default function FriendChat() {
                 {conversation.otherParticipant.name}
               </h2>
               <p className="text-dark-400 text-xs truncate flex items-center gap-1">
-                {socketConnected ? (
+                {fromCall ? (
+                  <>
+                    <span className="w-1.5 h-1.5 bg-primary-500 rounded-full animate-pulse"></span>
+                    <span>In call</span>
+                  </>
+                ) : socketConnected ? (
                   <>
                     <span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
                     <span>Online</span>
@@ -562,7 +727,26 @@ export default function FriendChat() {
             </div>
           ) : (
             messages.map((msg) => {
-              const isOwn = msg.senderId._id === user?._id;
+              const isOwn = msg.senderId?._id === user?._id;
+              
+              // System messages
+              if (msg.type === 'system') {
+                return (
+                  <div key={msg._id} className="flex justify-center animate-fade-in my-2">
+                    <div className="bg-dark-800/50 border border-primary-500/30 rounded-full px-4 py-1.5 max-w-[80%]">
+                      <p className="text-xs text-primary-400 text-center">
+                        {msg.content}
+                        {msg.metadata?.groupName && (
+                          <span className="text-dark-400 ml-1">
+                            • Tap to view original
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                );
+              }
+              
               return (
                 <div
                   key={msg._id}
@@ -577,7 +761,17 @@ export default function FriendChat() {
                   >
                     {!isOwn && (
                       <div className="text-primary-400 text-xs mb-1 font-medium">
-                        {msg.senderId.name}
+                        {msg.senderId?.name || 'Unknown'}
+                      </div>
+                    )}
+                    {msg.metadata?.isContext && msg.metadata?.groupName && (
+                      <div className="mb-2 p-2 bg-dark-700/50 rounded-lg border-l-2 border-primary-500/50">
+                        <p className="text-xs text-primary-400 mb-1">
+                          Private reply from {msg.metadata.groupName}
+                        </p>
+                        <p className="text-xs text-dark-300 italic">
+                          {msg.content}
+                        </p>
                       </div>
                     )}
                     {msg.attachments && msg.attachments.length > 0 && (
@@ -606,17 +800,46 @@ export default function FriendChat() {
                         ))}
                       </div>
                     )}
-                    {msg.content && (
+                    {msg.content && !msg.metadata?.isContext && (
                       <p className="text-sm text-white whitespace-pre-wrap break-words">
                         {msg.content}
                       </p>
                     )}
-                    <div className={`text-xs mt-1 ${isOwn ? 'text-primary-100' : 'text-dark-400'}`}>
-                      {new Date(msg.createdAt).toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
+                    <div className={`flex items-center justify-end gap-1 text-xs mt-1 ${isOwn ? 'text-primary-100' : 'text-dark-400'}`}>
+                      <span>
+                        {new Date(msg.createdAt).toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </span>
+                      {isOwn && (
+                        <span 
+                          className="ml-1" 
+                          title={msg.readBy && conversation?.otherParticipant?._id && msg.readBy.some((id: any) => {
+                            const idStr = typeof id === 'string' ? id : id?._id || id?.toString();
+                            return idStr === conversation.otherParticipant._id.toString();
+                          }) ? "Read" : "Delivered"}
+                        >
+                          {msg.readBy && conversation?.otherParticipant?._id && msg.readBy.some((id: any) => {
+                            const idStr = typeof id === 'string' ? id : id?._id || id?.toString();
+                            return idStr === conversation.otherParticipant._id.toString();
+                          }) ? (
+                            <Check className="w-3 h-3 text-blue-400" />
+                          ) : (
+                            <Check className="w-3 h-3 text-dark-400" />
+                          )}
+                        </span>
+                      )}
                     </div>
+
+                    {/* Message Reactions */}
+                    <MessageReactions
+                      reactions={msg.reactions}
+                      currentUserId={user?._id}
+                      onReactionClick={(emoji: string) => handleReaction(msg._id, emoji)}
+                      onRemoveReaction={(emoji: string) => handleRemoveReaction(msg._id, emoji)}
+                      messageId={msg._id}
+                    />
                   </div>
                 </div>
               );
@@ -626,9 +849,27 @@ export default function FriendChat() {
         </div>
       </div>
 
+      {/* Upload Progress */}
+      {uploading && selectedFiles.length > 0 && (
+        <div className="sticky bottom-16 bg-dark-900 border-t border-dark-800/50 p-3">
+          {selectedFiles.map((file, idx) => (
+            <UploadProgress
+              key={idx}
+              progress={50} // TODO: Implement actual upload progress tracking
+              fileName={file.name}
+              onCancel={() => {
+                setSelectedFiles((prev) => prev.filter((_, i) => i !== idx));
+                setUploading(false);
+              }}
+              className="mb-2"
+            />
+          ))}
+        </div>
+      )}
+
       {/* Input area - WhatsApp style */}
       <div className="sticky bottom-0 bg-dark-900 border-t border-dark-800/50 p-3">
-        {selectedFiles.length > 0 && (
+        {selectedFiles.length > 0 && !uploading && (
           <div className="mb-2 flex flex-wrap gap-2">
             {selectedFiles.map((file, idx) => (
               <div key={idx} className="relative">
@@ -665,6 +906,7 @@ export default function FriendChat() {
           />
           <div className="flex-1 relative">
             <input
+              ref={inputRef}
               type="text"
               value={newMessage}
               onChange={(e) => setNewMessage(e.target.value)}
@@ -677,6 +919,7 @@ export default function FriendChat() {
               placeholder="Type a message..."
               disabled={sending}
               className="w-full px-4 py-2.5 bg-dark-800/50 border border-dark-700 rounded-full text-white text-sm placeholder-dark-500 focus:outline-none focus:border-primary-500/50 transition disabled:opacity-50"
+              autoFocus
             />
           </div>
           <button

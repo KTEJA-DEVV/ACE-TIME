@@ -4,18 +4,31 @@ import { useAuthStore } from './store/auth';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastContainer } from './components/Toast';
 import FloatingCallOverlay from './components/FloatingCallOverlay';
+import GlobalCallHandler from './components/GlobalCallHandler';
+import NotificationSystem from './components/NotificationSystem';
+import { useNotifications } from './hooks/useNotifications';
+import NotificationBell from './components/NotificationBell';
+import Onboarding from './components/Onboarding';
+import MobileNavigation from './components/MobileNavigation';
 import LandingPage from './pages/LandingPage';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import ForgotPassword from './pages/ForgotPassword';
 import Home from './pages/Home';
 import CallRoom from './pages/CallRoom';
+import PrivateCall from './pages/PrivateCall';
+import FaceTimeCallInterface from './components/FaceTimeCallInterface';
 import History from './pages/History';
+import CallHistory from './pages/CallHistory';
 import CallDetail from './pages/CallDetail';
 import Messages from './pages/Messages';
 import Network from './pages/Network';
 import PrivateMessages from './pages/PrivateMessages';
-import Friends from './pages/Friends';
+import FriendsEnhanced from './pages/FriendsEnhanced';
 import FriendChat from './pages/FriendChat';
+import Contacts from './pages/Contacts';
+import ContactChat from './pages/ContactChat';
+import AIChat from './pages/AIChat';
 import Profile from './pages/Profile';
 import Settings from './pages/Settings';
 
@@ -39,6 +52,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 function App() {
   const { loadStoredAuth } = useAuthStore();
+  useNotifications(); // Set up Socket.IO notification listeners
 
   useEffect(() => {
     loadStoredAuth();
@@ -46,12 +60,18 @@ function App() {
 
   return (
     <ErrorBoundary>
+      <Onboarding />
       <ToastContainer />
+      <NotificationSystem />
+      <NotificationBell />
       <FloatingCallOverlay />
+      <GlobalCallHandler />
+      <MobileNavigation />
       <Routes>
         <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route
           path="/home"
           element={
@@ -71,7 +91,35 @@ function App() {
           }
         />
         <Route
+          path="/private-call/:roomId"
+          element={
+            <ProtectedRoute>
+              <ErrorBoundary>
+                <PrivateCall />
+              </ErrorBoundary>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/call/private/:callId"
+          element={
+            <ProtectedRoute>
+              <ErrorBoundary>
+                <FaceTimeCallInterface />
+              </ErrorBoundary>
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/history"
+          element={
+            <ProtectedRoute>
+              <CallHistory />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/history-old"
           element={
             <ProtectedRoute>
               <History />
@@ -122,7 +170,7 @@ function App() {
           path="/friends"
           element={
             <ProtectedRoute>
-              <Friends />
+              <FriendsEnhanced />
             </ProtectedRoute>
           }
         />
@@ -143,7 +191,39 @@ function App() {
           }
         />
         <Route
+          path="/contacts"
+          element={
+            <ProtectedRoute>
+              <Contacts />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/contacts/:contactId/chat"
+          element={
+            <ProtectedRoute>
+              <ContactChat />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/ai-chat"
+          element={
+            <ProtectedRoute>
+              <AIChat />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/profile"
+          element={
+            <ProtectedRoute>
+              <Profile />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/profile/:userId"
           element={
             <ProtectedRoute>
               <Profile />

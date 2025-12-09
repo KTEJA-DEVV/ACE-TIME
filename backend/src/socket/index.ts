@@ -1,8 +1,12 @@
 import { Server, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
+import mongoose from 'mongoose';
 import { CallSession } from '../models/CallSession';
 import { Transcript } from '../models/Transcript';
 import { Notes } from '../models/Notes';
+import { Message } from '../models/Message';
+import { Conversation } from '../models/Conversation';
+import { Contact } from '../models/Contact';
 import { transcribeAudio, generateNotes } from '../services/openai';
 
 interface AuthenticatedSocket extends Socket {
@@ -12,7 +16,7 @@ interface AuthenticatedSocket extends Socket {
 }
 
 interface RoomState {
-  participants: Map<string, { oderId: string; userName: string; socketId: string }>;
+  participants: Map<string, { userId: string; userName: string; socketId: string }>;
   callStarted: boolean;
   callStartedAt?: number; // Timestamp when call started
   createdAt: number; // Timestamp when room was created
@@ -23,6 +27,9 @@ interface RoomState {
 }
 
 const rooms = new Map<string, RoomState>();
+
+// Track online users (userId -> socketId[])
+const onlineUsers = new Map<string, Set<string>>();
 
 // Notes update interval (30 seconds)
 const NOTES_UPDATE_INTERVAL = 30000;
@@ -60,6 +67,11 @@ export const setupSocketHandlers = (io: Server) => {
 
   io.on('connection', (socket: AuthenticatedSocket) => {
     console.log(`🔌 User connected: ${socket.userId} (${socket.id})`);
+    
+    // Join user-specific room for call invitations
+    if (socket.userId && !socket.userId.startsWith('anon-')) {
+      socket.join(`user:${socket.userId}`);
+    }
 
     // Join a room
     socket.on('room:join', async (data: { roomId: string; userName?: string }) => {
@@ -95,7 +107,7 @@ export const setupSocketHandlers = (io: Server) => {
 
       const room = rooms.get(roomId)!;
       room.participants.set(socket.id, {
-        oderId: socket.userId!,
+        userId: socket.userId!,
         userName: socket.userName!,
         socketId: socket.id,
       });
@@ -108,7 +120,7 @@ export const setupSocketHandlers = (io: Server) => {
 
       // Notify room of new participant
       socket.to(roomId).emit('user:joined', {
-        oderId: socket.userId,
+        userId: socket.userId,
         userName: socket.userName,
         socketId: socket.id,
         participantCount: room.participants.size,
@@ -152,7 +164,7 @@ export const setupSocketHandlers = (io: Server) => {
       const { targetId, offer } = data;
       io.to(targetId).emit('signal:offer', {
         fromId: socket.id,
-        oderId: socket.userId,
+        userId: socket.userId,
         userName: socket.userName,
         offer,
       });
@@ -457,6 +469,13 @@ export const setupSocketHandlers = (io: Server) => {
     socket.on('conversation:join', (conversationId: string) => {
       socket.join(`conversation:${conversationId}`);
       console.log(`💬 User ${socket.userName} joined conversation ${conversationId}`);
+      
+      // Notify other participants that a friend joined
+      socket.to(`conversation:${conversationId}`).emit('friend:joined', {
+        friendId: socket.userId,
+        friendName: socket.userName,
+        conversationId,
+      });
     });
 
     // Leave conversation
@@ -464,17 +483,40 @@ export const setupSocketHandlers = (io: Server) => {
       socket.leave(`conversation:${conversationId}`);
     });
 
+    // Participant video/mute state updates
+    socket.on('participant:video:toggle', (data: { isVideoOff: boolean }) => {
+      if (socket.roomId) {
+        socket.to(socket.roomId).emit('participant:video:changed', {
+          socketId: socket.id,
+          userId: socket.userId,
+          userName: socket.userName,
+          isVideoOff: data.isVideoOff,
+        });
+      }
+    });
+
+    socket.on('participant:audio:toggle', (data: { isMuted: boolean }) => {
+      if (socket.roomId) {
+        socket.to(socket.roomId).emit('participant:audio:changed', {
+          socketId: socket.id,
+          userId: socket.userId,
+          userName: socket.userName,
+          isMuted: data.isMuted,
+        });
+      }
+    });
+
     // Typing indicator
     socket.on('typing:start', (data: { conversationId: string }) => {
       socket.to(`conversation:${data.conversationId}`).emit('typing:start', {
-        oderId: socket.userId,
+        userId: socket.userId,
         userName: socket.userName,
       });
     });
 
     socket.on('typing:stop', (data: { conversationId: string }) => {
       socket.to(`conversation:${data.conversationId}`).emit('typing:stop', {
-        oderId: socket.userId,
+        userId: socket.userId,
       });
     });
 
@@ -491,6 +533,18 @@ export const setupSocketHandlers = (io: Server) => {
 
     // Disconnect
     socket.on('disconnect', () => {
+      // Update online status
+      if (socket.userId && !socket.userId.startsWith('anon-')) {
+        const userSockets = onlineUsers.get(socket.userId);
+        if (userSockets) {
+          userSockets.delete(socket.id);
+          if (userSockets.size === 0) {
+            onlineUsers.delete(socket.userId);
+            // Notify friends that user is offline
+            io.emit('user:offline', { userId: socket.userId });
+          }
+        }
+      }
       handleLeaveRoom(socket, io);
       console.log(`🔌 User disconnected: ${socket.userId}`);
     });
@@ -505,7 +559,7 @@ async function handleLeaveRoom(socket: AuthenticatedSocket, io: Server) {
     room.participants.delete(socket.id);
 
     socket.to(socket.roomId).emit('user:left', {
-      oderId: socket.userId,
+      userId: socket.userId,
       userName: socket.userName,
       socketId: socket.id,
       participantCount: room.participants.size,
@@ -526,6 +580,11 @@ async function handleLeaveRoom(socket: AuthenticatedSocket, io: Server) {
             );
           }
           await callSession.save();
+          
+          // Attach call data to conversation if linked
+          if (callSession.metadata?.conversationId) {
+            await attachCallToConversation(callSession);
+          }
         }
       }
 
@@ -544,6 +603,153 @@ async function handleLeaveRoom(socket: AuthenticatedSocket, io: Server) {
 
   socket.leave(socket.roomId);
   socket.roomId = undefined;
+}
+
+// Attach call recording, transcript, and notes to conversation
+async function attachCallToConversation(callSession: any) {
+  try {
+    const conversationId = callSession.metadata?.conversationId;
+    if (!conversationId) return;
+
+    const conversation = await Conversation.findById(conversationId);
+    if (!conversation) return;
+
+    // Get transcript and notes
+    const transcript = callSession.transcriptId 
+      ? await Transcript.findById(callSession.transcriptId)
+      : null;
+    const notes = callSession.notesId
+      ? await Notes.findById(callSession.notesId)
+      : null;
+
+    // Create system message with call summary
+    const callSummary = `Call ended • Duration: ${Math.floor((callSession.duration || 0) / 60)}:${String((callSession.duration || 0) % 60).padStart(2, '0')}`;
+    
+    const systemMessage = new Message({
+      conversationId: conversation._id,
+      senderId: callSession.hostId,
+      content: callSummary,
+      type: 'system',
+      metadata: {
+        callId: callSession._id,
+        callDuration: callSession.duration,
+        hasRecording: !!callSession.recordingKey,
+        hasTranscript: !!transcript,
+        hasNotes: !!notes,
+      },
+    });
+    await systemMessage.save();
+
+    // If transcript exists, create a message with transcript link
+    if (transcript && transcript.segments && transcript.segments.length > 0) {
+      const transcriptPreview = transcript.segments
+        .slice(0, 3)
+        .map((seg: any) => `${seg.speaker}: ${seg.text}`)
+        .join('\n');
+      
+      const transcriptMessage = new Message({
+        conversationId: conversation._id,
+        senderId: callSession.hostId,
+        content: `📝 Call Transcript:\n${transcriptPreview}${transcript.segments.length > 3 ? '\n...' : ''}`,
+        type: 'call_transcript',
+        metadata: {
+          callId: callSession._id,
+          callDuration: callSession.duration,
+          callRecordingUrl: callSession.recordingUrl,
+          transcriptId: transcript._id,
+          isCallTranscript: true,
+        },
+        attachments: callSession.recordingUrl ? [{
+          type: 'call_recording',
+          url: callSession.recordingUrl,
+          name: `Call Recording - ${new Date(callSession.startedAt).toLocaleString()}`,
+          duration: callSession.duration,
+        }] : undefined,
+      });
+      await transcriptMessage.save();
+    }
+
+    // If notes exist, create a message with AI notes summary including key points and action items
+    if (notes && notes.summary) {
+      let summaryContent = `🤖 AI Call Summary:\n\n${notes.summary}`;
+      
+      // Add key points if available
+      if (notes.bullets && notes.bullets.length > 0) {
+        summaryContent += `\n\n📌 Key Points:\n${notes.bullets.map((bullet: string) => `• ${bullet}`).join('\n')}`;
+      }
+      
+      // Add action items if available
+      if (notes.actionItems && notes.actionItems.length > 0) {
+        summaryContent += `\n\n✅ Action Items:\n${notes.actionItems.map((item: any) => {
+          const assignee = item.assignee ? ` (@${item.assignee})` : '';
+          return `• ${item.text}${assignee}`;
+        }).join('\n')}`;
+      }
+      
+      // Add decisions if available
+      if (notes.decisions && notes.decisions.length > 0) {
+        summaryContent += `\n\n🎯 Decisions Made:\n${notes.decisions.map((decision: string) => `• ${decision}`).join('\n')}`;
+      }
+      
+      const notesMessage = new Message({
+        conversationId: conversation._id,
+        senderId: callSession.hostId,
+        content: summaryContent,
+        type: 'ai_notes',
+        metadata: {
+          callId: callSession._id,
+          callDuration: callSession.duration,
+          notesId: notes._id,
+          aiSummary: notes.summary,
+          aiActionItems: notes.actionItems,
+          aiDecisions: notes.decisions,
+          aiKeyTopics: notes.keyTopics,
+          isCallNotes: true,
+        },
+      });
+      await notesMessage.save();
+    }
+
+    // Update conversation last message
+    conversation.lastMessage = {
+      content: systemMessage.content,
+      senderId: systemMessage.senderId,
+      timestamp: systemMessage.createdAt,
+    };
+    await conversation.save();
+
+    // Update Contact records for both participants and trigger context update
+    try {
+      const participants = [callSession.hostId, ...(callSession.guestIds || [])];
+      
+      for (const participantId of participants) {
+        // Find contact where this user is the owner and the other participant is the contact
+        const otherParticipants = participants.filter(p => p.toString() !== participantId.toString());
+        
+        for (const otherParticipantId of otherParticipants) {
+          const contact = await Contact.findOne({
+            userId: participantId,
+            contactUserId: otherParticipantId,
+            conversationId: conversation._id,
+          });
+
+          if (contact) {
+            // Update contact stats
+            contact.totalCalls = (contact.totalCalls || 0) + 1;
+            contact.lastInteractionAt = new Date();
+            await contact.save();
+          }
+        }
+      }
+    } catch (contactError) {
+      console.error('[CALL] Error updating contacts:', contactError);
+      // Don't fail the whole operation if contact update fails
+    }
+
+    console.log(`[CALL] ✅ Attached call ${callSession._id} data to conversation ${conversationId}`);
+  } catch (error) {
+    console.error('[CALL] Error attaching call to conversation:', error);
+  }
 }
 
 async function updateNotes(room: RoomState, roomId: string, io: Server, isFinal: boolean = false) {
@@ -584,6 +790,21 @@ async function updateNotes(room: RoomState, roomId: string, io: Server, isFinal:
       isFinal,
       timestamp: Date.now(),
     });
+
+    // Emit AI insight notification when final notes are ready
+    if (isFinal && room.callId) {
+      const callSession = await CallSession.findById(room.callId);
+      if (callSession) {
+        const participants = [callSession.hostId, ...(callSession.guestIds || [])];
+        participants.forEach((participantId) => {
+          io.to(`user:${participantId}`).emit('ai:insight:ready', {
+            callId: room.callId,
+            conversationId: callSession.metadata?.conversationId,
+            summary: newNotes.summary,
+          });
+        });
+      }
+    }
 
     // Clear buffer after processing (keep last bit for context)
     if (!isFinal) {

@@ -16,6 +16,11 @@ import userRoutes from './routes/users';
 import messageRoutes from './routes/messages';
 import imageRoutes from './routes/images';
 import networkRoutes from './routes/network';
+import contactRoutes from './routes/contacts';
+import aiChatRoutes from './routes/ai-chat';
+import searchRoutes from './routes/search';
+import friendsRoutes from './routes/friends';
+import privateCallRoutes from './routes/privateCalls';
 import { setupSocketHandlers } from './socket';
 import { errorHandler, notFoundHandler, setupUnhandledRejectionHandler } from './middleware/errorHandler';
 import { initGridFS } from './services/storage';
@@ -87,6 +92,9 @@ const io = new Server(httpServer, {
   },
   transports: ['websocket', 'polling'], // Support both transports
   allowEIO3: true, // Allow Engine.IO v3 clients
+  pingTimeout: 60000, // 60 seconds - time to wait for pong
+  pingInterval: 25000, // 25 seconds - how often to ping
+  connectTimeout: 20000, // 20 seconds - connection timeout
 });
 
 console.log('📡 Socket.IO server configured');
@@ -121,9 +129,11 @@ app.get('/api/info', (req, res) => {
 
 // Health check
 app.get('/health', (req, res) => {
+  const mongoStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
+    mongodb: mongoStatus,
     openai: isOpenAIConfigured() ? 'configured' : 'not configured (mock mode)',
   });
 });
@@ -132,10 +142,15 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/rooms', roomRoutes);
 app.use('/api/calls', callRoutes);
+app.use('/api/calls/private', privateCallRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/images', imageRoutes);
 app.use('/api/network', networkRoutes);
+app.use('/api/contacts', contactRoutes);
+app.use('/api/ai-chat', aiChatRoutes);
+app.use('/api/search', searchRoutes);
+app.use('/api/friends', friendsRoutes);
 
 // Serve static files from frontend build (in production)
 const frontendDistPath = path.resolve(__dirname, '../../frontend/dist');
@@ -174,43 +189,62 @@ setupSocketHandlers(io);
 // Make io accessible to routes
 app.set('io', io);
 
-// MongoDB connection
+// Start server immediately - don't wait for MongoDB
+const PORT = Number(process.env.PORT) || 3001;
+
+// Handle server startup errors
+httpServer.on('error', (error: NodeJS.ErrnoException) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`❌ Port ${PORT} is already in use.`);
+    console.error(`   Please stop the process using port ${PORT} or change the PORT in .env`);
+    console.error(`   To find what's using the port, run: netstat -ano | findstr :${PORT}`);
+    process.exit(1);
+  } else if (error.code === 'EACCES') {
+    console.error(`❌ Permission denied. Cannot bind to port ${PORT}.`);
+    console.error(`   Try using a different port (set PORT in .env) or run with elevated privileges`);
+    process.exit(1);
+  } else {
+    console.error('❌ Server error:', error);
+    process.exit(1);
+  }
+});
+
+// Start the server
+httpServer.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 AceTime API running on port ${PORT}`);
+  console.log(`📡 Socket.IO ready for connections`);
+  console.log(`🌐 Server accessible at http://localhost:${PORT}`);
+  console.log(`🌐 Health check available at http://localhost:${PORT}/health`);
+  
+  if (!isOpenAIConfigured()) {
+    console.log('⚠️  OpenAI not configured - transcription/AI notes will use mock data');
+    console.log('   Add OPENAI_API_KEY to .env to enable AI features');
+  } else {
+    console.log('✅ OpenAI configured - AI features enabled');
+  }
+});
+
+// MongoDB connection - connect in background, don't block server startup
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://saitejat562:S%40i123tej@cluster0.vkyh8.mongodb.net/acetime';
 
-mongoose.connect(MONGODB_URI)
+mongoose.connect(MONGODB_URI, {
+  serverSelectionTimeoutMS: 10000, // 10 seconds timeout for initial connection
+  socketTimeoutMS: 45000, // 45 seconds timeout for socket operations
+  connectTimeoutMS: 10000, // 10 seconds timeout for connection
+  maxPoolSize: 10, // Maintain up to 10 socket connections
+  retryWrites: true,
+  w: 'majority',
+})
   .then(() => {
     console.log('✅ Connected to MongoDB');
-    
     // Initialize GridFS for file storage
     initGridFS();
-    
-    const PORT = Number(process.env.PORT) || 3001;
-    httpServer.listen(PORT, () => {
-      console.log(`🚀 AceTime API running on port ${PORT}`);
-      console.log(`📡 Socket.IO ready for connections`);
-      console.log(`🌐 Server accessible at http://localhost:${PORT}`);
-      
-      if (!isOpenAIConfigured()) {
-        console.log('⚠️  OpenAI not configured - transcription/AI notes will use mock data');
-        console.log('   Add OPENAI_API_KEY to .env to enable AI features');
-      } else {
-        console.log('✅ OpenAI configured - AI features enabled');
-      }
-    });
   })
   .catch((error) => {
     console.error('❌ MongoDB connection error:', error);
     console.error('   Error details:', error.message);
-    console.error('   Attempting to start server anyway (some features may not work)...');
-    
-    // Start server even if MongoDB fails (for development)
-    const PORT = Number(process.env.PORT) || 3001;
-    httpServer.listen(PORT, () => {
-      console.log(`⚠️  AceTime API running on port ${PORT} (MongoDB not connected)`);
-      console.log(`📡 Socket.IO ready for connections`);
-      console.log(`🌐 Server accessible at http://localhost:${PORT}`);
-      console.log('   Note: Database features will not work until MongoDB is connected');
-    });
+    console.warn('   Server is running but database features may not work');
+    console.warn('   MongoDB will retry connection automatically');
   });
 
 // Graceful shutdown

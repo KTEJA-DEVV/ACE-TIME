@@ -18,6 +18,13 @@ export interface IMessage extends Document {
     userId: mongoose.Types.ObjectId;
   }>;
   readBy: mongoose.Types.ObjectId[];
+  metadata?: {
+    originalMessageId?: mongoose.Types.ObjectId;
+    originalConversationId?: mongoose.Types.ObjectId;
+    groupName?: string;
+    isContext?: boolean;
+    isPrivateReply?: boolean;
+  };
   createdAt: Date;
   updatedAt: Date;
 }
@@ -41,7 +48,7 @@ const messageSchema = new Schema<IMessage>(
     },
     type: {
       type: String,
-      enum: ['text', 'ai_response', 'image', 'system'],
+      enum: ['text', 'ai_response', 'image', 'system', 'call_summary', 'call_transcript', 'ai_notes'],
       default: 'text',
     },
     aiGenerated: {
@@ -53,9 +60,11 @@ const messageSchema = new Schema<IMessage>(
       default: null,
     },
     attachments: [{
-      type: { type: String, enum: ['image', 'file', 'audio'] },
+      type: { type: String, enum: ['image', 'file', 'audio', 'video', 'call_recording'] },
       url: String,
       name: String,
+      size: Number,
+      duration: Number, // For audio/video files
     }],
     reactions: [{
       emoji: String,
@@ -65,6 +74,24 @@ const messageSchema = new Schema<IMessage>(
       type: Schema.Types.ObjectId,
       ref: 'User',
     }],
+    metadata: {
+      originalMessageId: { type: Schema.Types.ObjectId, ref: 'Message' },
+      originalConversationId: { type: Schema.Types.ObjectId, ref: 'Conversation' },
+      groupName: String,
+      isContext: Boolean,
+      isPrivateReply: Boolean,
+      // Call-related metadata
+      callId: { type: Schema.Types.ObjectId, ref: 'CallSession' },
+      callDuration: Number,
+      callRecordingUrl: String,
+      transcriptId: { type: Schema.Types.ObjectId, ref: 'Transcript' },
+      notesId: { type: Schema.Types.ObjectId, ref: 'Notes' },
+      // AI notes metadata
+      aiSummary: String,
+      aiActionItems: [{ text: String, assignee: String }],
+      aiDecisions: [String],
+      aiKeyTopics: [String],
+    },
   },
   {
     timestamps: true,

@@ -6,6 +6,8 @@ import { Conversation } from '../models/Conversation';
 import { Message } from '../models/Message';
 import { CallSession } from '../models/CallSession';
 import { Connection } from '../models/Connection';
+import { Contact } from '../models/Contact';
+import { User } from '../models/User';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { asyncHandler } from '../middleware/errorHandler';
 import { uploadRecording } from '../services/storage';
@@ -335,12 +337,62 @@ router.post(
     };
     await conversation.save();
 
-    // Auto-add to friends for direct/private conversations
+    // Update Contact records for direct conversations
     if (conversation.type === 'direct' && conversation.participants.length === 2) {
       const otherParticipantId = conversation.participants.find(
         (p: any) => p.toString() !== userIdStr
       );
+      
       if (otherParticipantId) {
+        // Update contact for current user
+        const contact = await Contact.findOne({
+          userId: new mongoose.Types.ObjectId(userIdStr),
+          contactUserId: new mongoose.Types.ObjectId(otherParticipantId.toString()),
+          conversationId: conversation._id,
+        });
+
+        if (contact) {
+          contact.totalMessages = (contact.totalMessages || 0) + 1;
+          contact.lastInteractionAt = new Date();
+          await contact.save();
+          
+          // Trigger context update in background (non-blocking)
+          const { generateContactContext } = await import('../services/contactContext');
+          const contactUser = await User.findById(otherParticipantId);
+          generateContactContext(
+            contactUser?.name || 'Contact',
+            userIdStr,
+            otherParticipantId.toString(),
+            conversation._id.toString()
+          ).then((context) => {
+            contact.aiContext = {
+              summary: context.summary,
+              keyTopics: context.keyTopics,
+              relationship: context.relationship,
+              lastUpdated: new Date(),
+            };
+            contact.save().catch(console.error);
+          }).catch(console.error);
+        } else {
+          // Auto-create contact if it doesn't exist
+          try {
+            const newContact = new Contact({
+              userId: new mongoose.Types.ObjectId(userIdStr),
+              contactUserId: new mongoose.Types.ObjectId(otherParticipantId.toString()),
+              conversationId: conversation._id,
+              lastInteractionAt: new Date(),
+              totalMessages: 1,
+            });
+            await newContact.save();
+          } catch (err: any) {
+            // Ignore duplicate key errors (contact might have been created concurrently)
+            if (err.code !== 11000) {
+              console.error('[CONTACTS] Error creating contact:', err);
+            }
+          }
+        }
+
+        // Auto-add to friends for direct/private conversations
         // Run in background - don't block message sending
         ensureFriendConnection(userIdStr, otherParticipantId.toString()).catch(err => {
           console.error('[FRIENDS] Background friend creation failed:', err);
@@ -349,35 +401,71 @@ router.post(
     }
 
     // Emit via Socket.IO
-      const io = req.app.get('io');
-      if (io) {
+    const io = req.app.get('io');
+    if (io) {
         // Populate sender info before emitting
         const populatedMessage = await Message.findById(message._id)
           .populate('senderId', 'name avatar')
           .lean();
         
+        if (!populatedMessage) {
+          console.error('[MESSAGES] ❌ Failed to populate message after save');
+          res.status(500).json({ error: 'Failed to send message' });
+          return;
+        }
+        
         console.log(`[MESSAGES] 📤 Emitting message:new to conversation:${id}`);
         console.log(`[MESSAGES] Message ID: ${message._id}, Sender: ${req.userId}`);
         console.log(`[MESSAGES] Message content: ${content.substring(0, 50)}...`);
         
-        // Ensure conversationId is included in the message object
+        // Ensure conversationId is included in the message object (as string for consistency)
+        // Handle populated senderId (could be ObjectId or populated object)
+        const senderIdData = populatedMessage.senderId;
+        let senderData: any;
+        
+        if (senderIdData && typeof senderIdData === 'object' && 'name' in senderIdData && !Array.isArray(senderIdData)) {
+          // Populated user object
+          const senderObj = senderIdData as any;
+          senderData = {
+            _id: senderObj._id?.toString() || senderObj.toString(),
+            name: senderObj.name || 'Unknown',
+            avatar: senderObj.avatar || undefined,
+          };
+        } else {
+          // Just ObjectId - fetch user info
+          const userId = Array.isArray(senderIdData) ? senderIdData[0] : senderIdData;
+          const user = await User.findById(userId).select('name avatar').lean();
+          senderData = {
+            _id: userId?.toString() || userId,
+            name: (user as any)?.name || 'Unknown',
+            avatar: (user as any)?.avatar || undefined,
+          };
+        }
+        
         const messageToEmit = {
           ...populatedMessage,
-          conversationId: id,
+          conversationId: id.toString(), // Ensure it's a string
+          _id: populatedMessage._id.toString(),
+          senderId: senderData,
         };
-        
-        // Emit to all participants in the conversation room (including sender)
-        io.to(`conversation:${id}`).emit('message:new', {
-          message: messageToEmit,
-        });
-        
-        // Also log how many sockets are in the room for debugging
-        const room = io.sockets.adapter.rooms.get(`conversation:${id}`);
-        const socketCount = room ? room.size : 0;
-        console.log(`[MESSAGES] ✅ Room 'conversation:${id}' has ${socketCount} socket(s) - message broadcasted`);
-      } else {
-        console.warn('[MESSAGES] ⚠️ Socket.IO not available - message not broadcasted');
+      
+      // Emit to all participants in the conversation room
+      // This ensures both users receive the message
+      io.to(`conversation:${id}`).emit('message:new', {
+        message: messageToEmit,
+      });
+      
+      // Also log how many sockets are in the room for debugging
+      const room = io.sockets.adapter.rooms.get(`conversation:${id}`);
+      const socketCount = room ? room.size : 0;
+      console.log(`[MESSAGES] ✅ Room 'conversation:${id}' has ${socketCount} socket(s) - message broadcasted`);
+      
+      if (socketCount === 0) {
+        console.warn(`[MESSAGES] ⚠️ No sockets in room 'conversation:${id}' - message saved but not delivered in real-time`);
       }
+    } else {
+      console.warn('[MESSAGES] ⚠️ Socket.IO not available - message not broadcasted');
+    }
 
     // Generate AI response if requested or auto-respond enabled
     const shouldRespond = requestAiResponse || 
@@ -448,9 +536,79 @@ router.post(
       return;
     }
 
-    // Allow private breakouts for group conversations (default enabled)
+    // For one-on-one calls, create a direct private conversation instead of showing error
+    // This allows private chat during any call, not just group calls
     if (parentConversation.type !== 'group') {
-      res.status(400).json({ error: 'Private breakouts only available for group conversations' });
+      // Instead of error, create/retrieve direct private conversation
+      const currentUserObjectId = new mongoose.Types.ObjectId(req.userId!.toString());
+      const targetUserObjectId = new mongoose.Types.ObjectId(targetUserId.toString());
+      const participants = [currentUserObjectId, targetUserObjectId];
+      
+      const existingPrivate = await Conversation.findOne({
+        type: 'direct',
+        participants: { $all: participants, $size: 2 },
+      }).populate('participants', 'name avatar').populate('lastMessage.senderId', 'name avatar');
+
+      if (existingPrivate) {
+        // If context provided, add it as a message
+        if (context) {
+          const contextMessage = new Message({
+            conversationId: existingPrivate._id,
+            senderId: currentUserObjectId,
+            content: context,
+            type: 'text',
+            metadata: {
+              originalMessageId: originalMessageId ? new mongoose.Types.ObjectId(originalMessageId) : undefined,
+              originalConversationId: id ? new mongoose.Types.ObjectId(id) : undefined,
+              isContext: true,
+            },
+          });
+          await contextMessage.save();
+          existingPrivate.lastMessage = {
+            content: context,
+            senderId: currentUserObjectId,
+            timestamp: new Date(),
+          };
+          await existingPrivate.save();
+        }
+        
+        res.json({ conversation: existingPrivate });
+        return;
+      }
+      
+      // Create new direct conversation
+      const newPrivate = new Conversation({
+        type: 'direct',
+        participants: participants,
+        lastMessage: context ? {
+          content: context,
+          senderId: currentUserObjectId,
+          timestamp: new Date(),
+        } : undefined,
+      });
+      await newPrivate.save();
+      
+      // If context provided, add it as initial message
+      if (context) {
+        const contextMessage = new Message({
+          conversationId: newPrivate._id,
+          senderId: currentUserObjectId,
+          content: context,
+          type: 'text',
+          metadata: {
+            originalMessageId: originalMessageId ? new mongoose.Types.ObjectId(originalMessageId) : undefined,
+            originalConversationId: id ? new mongoose.Types.ObjectId(id) : undefined,
+            isContext: true,
+          },
+        });
+        await contextMessage.save();
+      }
+      
+      const populated = await Conversation.findById(newPrivate._id)
+        .populate('participants', 'name avatar')
+        .populate('lastMessage.senderId', 'name avatar');
+      
+      res.json({ conversation: populated });
       return;
     }
 
@@ -548,6 +706,25 @@ router.post(
       await conversation.populate('participants', 'name email avatar');
     }
 
+    const { originalConversationId, groupName } = req.body;
+    const isNewConversation = !conversation.lastMessage;
+    
+    // If this is a new conversation from a group, add a system message
+    if (isNewConversation && originalConversationId && groupName) {
+      const systemMessage = new Message({
+        conversationId: conversation._id,
+        senderId: req.userId, // System messages still need a senderId, but we'll mark them as system type
+        content: `Private reply from ${groupName}`,
+        type: 'system',
+        metadata: {
+          originalConversationId: new mongoose.Types.ObjectId(originalConversationId),
+          groupName: groupName,
+          isPrivateReply: true,
+        },
+      });
+      await systemMessage.save();
+    }
+    
     // If context is provided, prepopulate with a message
     if (context) {
       const contextMessage = new Message({
@@ -556,7 +733,9 @@ router.post(
         content: context,
         type: 'text',
         metadata: {
-          originalMessageId: originalMessageId || null,
+          originalMessageId: originalMessageId ? new mongoose.Types.ObjectId(originalMessageId) : undefined,
+          originalConversationId: originalConversationId ? new mongoose.Types.ObjectId(originalConversationId) : undefined,
+          groupName: groupName,
           isContext: true,
         },
       });
@@ -590,20 +769,33 @@ router.get(
       .populate('lastMessage.senderId', 'name')
       .sort({ 'lastMessage.timestamp': -1, updatedAt: -1 });
 
-    // Filter out self and get the other participant
-    const privateConversations = conversations
-      .map(conv => {
+    // Filter out self and get the other participant, calculate unread count
+    const privateConversations = await Promise.all(
+      conversations.map(async (conv) => {
         const otherParticipant = conv.participants.find(
           (p: any) => p._id.toString() !== userId.toString()
         );
+        
+        if (!otherParticipant) return null;
+        
+        // Calculate unread count (messages not read by current user)
+        const unreadCount = await Message.countDocuments({
+          conversationId: conv._id,
+          senderId: { $ne: userId },
+          readBy: { $ne: userId },
+        });
+        
         return {
           ...conv.toObject(),
           otherParticipant: otherParticipant || null,
+          unreadCount,
         };
       })
-      .filter(conv => conv.otherParticipant !== null); // Only return conversations with valid otherParticipant
+    );
 
-    res.json({ conversations: privateConversations });
+    const filtered = privateConversations.filter(conv => conv !== null && conv.otherParticipant !== null);
+
+    res.json({ conversations: filtered });
   })
 );
 
@@ -914,6 +1106,42 @@ router.post(
   })
 );
 
+// POST /api/messages/conversations/:id/messages/:messageId/read - Mark message as read
+router.post(
+  '/conversations/:id/messages/:messageId/read',
+  authenticate,
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id, messageId } = req.params;
+    const userId = req.userId!;
+
+    const conversation = await Conversation.findById(id);
+    const userIdStr = userId.toString();
+    const isParticipant = conversation?.participants?.some(
+      (p: any) => p.toString() === userIdStr
+    );
+    
+    if (!conversation || !isParticipant) {
+      res.status(404).json({ error: 'Conversation not found' });
+      return;
+    }
+
+    const message = await Message.findById(messageId);
+    if (!message || message.conversationId.toString() !== id) {
+      res.status(404).json({ error: 'Message not found' });
+      return;
+    }
+
+    // Add user to readBy if not already there
+    const userIdObjectId = new mongoose.Types.ObjectId(userIdStr);
+    if (!message.readBy.some((id: any) => id.toString() === userIdStr)) {
+      message.readBy.push(userIdObjectId);
+      await message.save();
+    }
+
+    res.json({ success: true });
+  })
+);
+
 // ============================================================================
 // End of THREADS API
 // ============================================================================
@@ -970,16 +1198,21 @@ router.post(
 
     await message.save();
 
-    // Emit via Socket.IO
+    // Populate and emit via Socket.IO
+    const populatedMessage = await Message.findById(message._id)
+      .populate('senderId', 'name avatar')
+      .populate('reactions.userId', 'name avatar')
+      .lean();
+
     const io = req.app.get('io');
     if (io) {
-      io.to(`conversation:${id}`).emit('message:reaction', {
-        messageId: message._id,
-        reactions: message.reactions,
+      io.to(`conversation:${id}`).emit('message:reaction:updated', {
+        messageId: message._id.toString(),
+        message: populatedMessage,
       });
     }
 
-    res.json({ reactions: message.reactions });
+    res.json({ message: populatedMessage, reactions: message.reactions });
   })
 );
 

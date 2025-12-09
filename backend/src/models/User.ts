@@ -7,10 +7,44 @@ export interface IUser extends Document {
   email: string;
   passwordHash: string;
   avatar?: string;
+  bio?: string;
   settings: {
+    // Profile
     defaultMic: boolean;
     defaultCamera: boolean;
     autoRecord: boolean;
+    // Notifications
+    notifications: {
+      incomingCalls: boolean;
+      newMessages: boolean;
+      friendRequests: boolean;
+      aiInsights: boolean;
+      callRecordings: boolean;
+    };
+    // Call Quality
+    callQuality: {
+      videoResolution: '720p' | '1080p' | 'auto';
+      bandwidth: 'low' | 'medium' | 'high' | 'auto';
+      audioQuality: 'low' | 'medium' | 'high';
+    };
+    // AI Settings
+    ai: {
+      enabled: boolean;
+      voicePreference: 'male' | 'female' | 'neutral';
+      autoTranscribe: boolean;
+      autoSummarize: boolean;
+    };
+    // Privacy
+    privacy: {
+      whoCanCall: 'everyone' | 'contacts' | 'nobody';
+      chatHistory: 'forever' | '30days' | '7days' | 'delete';
+      profileVisibility: 'public' | 'contacts' | 'private';
+    };
+    // Appearance
+    appearance: {
+      theme: 'dark' | 'light' | 'auto';
+      accentColor: 'purple' | 'blue' | 'green' | 'red' | 'orange';
+    };
   };
   refreshToken?: string;
   createdAt: Date;
@@ -44,10 +78,42 @@ const userSchema = new Schema<IUser>(
       type: String,
       default: null,
     },
+    bio: {
+      type: String,
+      maxlength: 500,
+      default: null,
+    },
     settings: {
       defaultMic: { type: Boolean, default: true },
       defaultCamera: { type: Boolean, default: true },
       autoRecord: { type: Boolean, default: true },
+      notifications: {
+        incomingCalls: { type: Boolean, default: true },
+        newMessages: { type: Boolean, default: true },
+        friendRequests: { type: Boolean, default: true },
+        aiInsights: { type: Boolean, default: true },
+        callRecordings: { type: Boolean, default: true },
+      },
+      callQuality: {
+        videoResolution: { type: String, enum: ['720p', '1080p', 'auto'], default: 'auto' },
+        bandwidth: { type: String, enum: ['low', 'medium', 'high', 'auto'], default: 'auto' },
+        audioQuality: { type: String, enum: ['low', 'medium', 'high'], default: 'high' },
+      },
+      ai: {
+        enabled: { type: Boolean, default: true },
+        voicePreference: { type: String, enum: ['male', 'female', 'neutral'], default: 'neutral' },
+        autoTranscribe: { type: Boolean, default: true },
+        autoSummarize: { type: Boolean, default: true },
+      },
+      privacy: {
+        whoCanCall: { type: String, enum: ['everyone', 'contacts', 'nobody'], default: 'everyone' },
+        chatHistory: { type: String, enum: ['forever', '30days', '7days', 'delete'], default: 'forever' },
+        profileVisibility: { type: String, enum: ['public', 'contacts', 'private'], default: 'public' },
+      },
+      appearance: {
+        theme: { type: String, enum: ['dark', 'light', 'auto'], default: 'dark' },
+        accentColor: { type: String, enum: ['purple', 'blue', 'green', 'red', 'orange'], default: 'purple' },
+      },
     },
     refreshToken: {
       type: String,

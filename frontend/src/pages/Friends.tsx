@@ -44,12 +44,13 @@ interface PrivateConversation {
     timestamp: string;
   };
   updatedAt: string;
+  unreadCount?: number;
 }
 
 // Combined friend item for display
 interface FriendItem {
   id: string;
-  oderId: string;
+  userId: string;
   name: string;
   email: string;
   avatar?: string;
@@ -61,6 +62,7 @@ interface FriendItem {
   };
   hasConversation: boolean;
   updatedAt: string;
+  unreadCount?: number;
 }
 
 export default function Friends() {
@@ -74,6 +76,29 @@ export default function Friends() {
     if (accessToken && user) {
       fetchAllFriends();
     }
+    
+    // Listen for conversation updates (when new chats are created)
+    const handleConversationUpdate = () => {
+      console.log('[FRIENDS] 🔄 Conversation updated, refreshing list...');
+      // Small delay to ensure backend has processed the update
+      setTimeout(() => {
+        fetchAllFriends();
+      }, 500);
+    };
+    
+    window.addEventListener('conversationUpdated', handleConversationUpdate);
+    
+    // Also refresh periodically to catch any missed updates
+    const refreshInterval = setInterval(() => {
+      if (accessToken && user) {
+        fetchAllFriends();
+      }
+    }, 30000); // Refresh every 30 seconds
+    
+    return () => {
+      window.removeEventListener('conversationUpdated', handleConversationUpdate);
+      clearInterval(refreshInterval);
+    };
   }, [accessToken, user]);
 
   const fetchAllFriends = async () => {
@@ -101,7 +126,7 @@ export default function Friends() {
           if (conv.otherParticipant) {
             friendsMap.set(conv.otherParticipant._id, {
               id: conv._id,
-              oderId: conv.otherParticipant._id,
+              userId: conv.otherParticipant._id,
               name: conv.otherParticipant.name,
               email: conv.otherParticipant.email,
               avatar: conv.otherParticipant.avatar,
@@ -113,6 +138,7 @@ export default function Friends() {
               } : undefined,
               hasConversation: true,
               updatedAt: conv.lastMessage?.timestamp || conv.updatedAt,
+              unreadCount: conv.unreadCount || 0,
             });
           }
         });
@@ -127,7 +153,7 @@ export default function Friends() {
           if (conn.connectedUserId && !friendsMap.has(conn.connectedUserId._id)) {
             friendsMap.set(conn.connectedUserId._id, {
               id: conn._id,
-              oderId: conn.connectedUserId._id,
+              userId: conn.connectedUserId._id,
               name: conn.connectedUserId.name,
               email: conn.connectedUserId.email,
               avatar: conn.connectedUserId.avatar,
@@ -156,8 +182,16 @@ export default function Friends() {
     }
   };
 
-  const handleOpenChat = async (friend: FriendItem) => {
+  const handleOpenChat = async (friend: FriendItem, e?: React.MouseEvent) => {
     if (!accessToken || !user) return;
+    
+    // Prevent navigation if clicking on call buttons
+    if (e) {
+      const target = e.target as HTMLElement;
+      if (target.closest('button[title="Audio call"]') || target.closest('button[title="Video call"]')) {
+        return;
+      }
+    }
     
     if (friend.conversationId) {
       // Open existing conversation directly
@@ -165,7 +199,7 @@ export default function Friends() {
     } else {
       // Navigate to FriendChat with userId - it will create the conversation
       // This is more reliable than creating here and then navigating
-      navigate(`/friends/chat/user/${friend.oderId}`);
+      navigate(`/friends/chat/user/${friend.userId}`);
     }
   };
 
@@ -173,6 +207,29 @@ export default function Friends() {
     if (!accessToken || !user) return;
     
     try {
+      // First, ensure we have a conversation ID (create if needed)
+      let conversationId = friend.conversationId;
+      
+      if (!conversationId) {
+        // Create a direct conversation first
+        const convResponse = await fetch(`${API_URL}/api/messages/conversations/private`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            targetUserId: friend.userId,
+          }),
+        });
+        
+        if (convResponse.ok) {
+          const convData = await convResponse.json();
+          conversationId = convData.conversation._id;
+        }
+      }
+      
+      // Create the call room
       const response = await fetch(`${API_URL}/api/rooms`, {
         method: 'POST',
         headers: {
@@ -181,13 +238,23 @@ export default function Friends() {
         },
         body: JSON.stringify({ 
           audioOnly: !video,
-          participants: [friend.oderId],
+          participants: [friend.userId],
+          conversationId: conversationId, // Link call to conversation
         }),
       });
 
       if (response.ok) {
         const data = await response.json();
-        navigate(`/call/${data.roomId}`);
+        
+        // Emit call invitation to the target user via socket
+        // This will be handled by the socket connection in the app
+        // Navigate to private call interface (lighter interface for 1-on-1)
+        navigate(`/private-call/${data.roomId}`, {
+          state: {
+            conversationId: conversationId,
+            fromPrivateChat: true,
+          },
+        });
       } else {
         toast.error('Error', 'Failed to start call');
       }
@@ -254,16 +321,16 @@ export default function Friends() {
           </Link>
         </div>
 
-        {/* Search */}
-        <div className="px-4 pb-3">
+        {/* Search - WhatsApp Style */}
+        <div className="px-4 pb-3 bg-dark-900">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-dark-400" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search chats..."
-              className="w-full pl-10 pr-4 py-2 bg-dark-800/50 border border-dark-700 rounded-lg text-white text-sm placeholder-dark-500 focus:outline-none focus:border-primary-500/50 glass-card"
+              placeholder="Search or start new chat"
+              className="w-full pl-10 pr-4 py-2.5 bg-dark-800/70 border border-dark-700/50 rounded-lg text-white text-sm placeholder-dark-500 focus:outline-none focus:border-primary-500/50 focus:bg-dark-800 transition"
             />
           </div>
         </div>
@@ -299,7 +366,10 @@ export default function Friends() {
                 </div>
                 <h3 className="text-white font-semibold text-xl mb-3">You have no private chats yet</h3>
                 <p className="text-dark-400 text-sm max-w-sm mb-6 leading-relaxed">
-                  Start a new session from a group chat or call! Connect with friends to begin private conversations.
+                  You have no private conversations yet. Start one from a group chat or call to see it here! 
+                  <br /><br />
+                  <span className="text-primary-400 font-medium">💡 Tip:</span> During a group chat or live call, 
+                  tap a participant's name and select "Reply in private" to start a private conversation.
                 </p>
                 <div className="flex flex-col sm:flex-row gap-3">
                   <Link
@@ -321,17 +391,17 @@ export default function Friends() {
             )}
           </div>
         ) : (
-          <div className="divide-y divide-dark-800/50">
+          <div className="divide-y divide-dark-800/30">
             {filteredFriends.map((friend) => (
               <div
                 key={friend.id}
-                className="px-4 py-3 hover:bg-dark-800/30 active:bg-dark-800/50 cursor-pointer transition-colors"
-                onClick={() => handleOpenChat(friend)}
+                className="px-4 py-3 hover:bg-dark-800/40 active:bg-dark-800/60 cursor-pointer transition-colors bg-dark-950/50 group"
+                onClick={(e) => handleOpenChat(friend, e)}
               >
                 <div className="flex items-center gap-3">
-                  {/* Avatar */}
+                  {/* Avatar - WhatsApp Style */}
                   <div className="relative flex-shrink-0">
-                    <div className="w-14 h-14 bg-gradient-to-br from-primary-500 to-purple-500 rounded-full flex items-center justify-center">
+                    <div className="w-14 h-14 bg-gradient-to-br from-primary-500 to-purple-500 rounded-full flex items-center justify-center overflow-hidden">
                       {friend.avatar ? (
                         <img 
                           src={friend.avatar} 
@@ -344,12 +414,12 @@ export default function Friends() {
                         </span>
                       )}
                     </div>
-                    {/* Online indicator could go here */}
+                    {/* Online indicator - could add later */}
                   </div>
 
-                  {/* Content */}
+                  {/* Content - WhatsApp Style */}
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between mb-0.5">
+                    <div className="flex items-center justify-between mb-1">
                       <h3 className="text-white font-medium text-[15px] truncate">
                         {friend.name}
                       </h3>
@@ -359,13 +429,13 @@ export default function Friends() {
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-2">
                       {friend.lastMessage ? (
-                        <p className="text-dark-400 text-sm truncate pr-2">
+                        <p className="text-dark-400 text-sm truncate flex-1 min-w-0">
                           {friend.lastMessage.isOwn && (
-                            <span className="text-dark-500">You: </span>
+                            <span className="text-dark-500 mr-1">You: </span>
                           )}
-                          {friend.lastMessage.content}
+                          <span className="truncate">{friend.lastMessage.content}</span>
                         </p>
                       ) : friend.hasConversation ? (
                         <p className="text-dark-500 text-sm italic">No messages yet</p>
@@ -378,8 +448,8 @@ export default function Friends() {
                     </div>
                   </div>
 
-                  {/* Quick Actions */}
-                  <div className="flex items-center gap-1 flex-shrink-0">
+                  {/* Quick Actions - WhatsApp Style (Always Visible) */}
+                  <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -388,7 +458,7 @@ export default function Friends() {
                       className="p-2.5 bg-dark-800/50 hover:bg-green-500/20 rounded-full transition group"
                       title="Audio call"
                     >
-                      <Phone className="w-4 h-4 text-dark-400 group-hover:text-green-400" />
+                      <Phone className="w-4 h-4 text-dark-400 group-hover:text-green-400 transition" />
                     </button>
                     <button
                       onClick={(e) => {
@@ -398,7 +468,7 @@ export default function Friends() {
                       className="p-2.5 bg-dark-800/50 hover:bg-blue-500/20 rounded-full transition group"
                       title="Video call"
                     >
-                      <Video className="w-4 h-4 text-dark-400 group-hover:text-blue-400" />
+                      <Video className="w-4 h-4 text-dark-400 group-hover:text-blue-400 transition" />
                     </button>
                   </div>
                 </div>

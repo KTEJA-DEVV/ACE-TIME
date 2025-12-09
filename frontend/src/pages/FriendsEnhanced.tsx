@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Search, ArrowLeft, UserPlus, Users, Filter } from 'lucide-react';
 import { useAuthStore } from '../store/auth';
@@ -6,7 +6,6 @@ import { useCallStore } from '../store/call';
 import { toast } from '../components/Toast';
 import FriendCard from '../components/FriendCard';
 import CallNotification from '../components/CallNotification';
-import { motion } from 'framer-motion';
 
 const getApiUrl = () => {
   if (import.meta.env.VITE_API_URL) {

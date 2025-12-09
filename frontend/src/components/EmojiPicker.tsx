@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
-import EmojiPicker, { EmojiClickData, SkinTones } from 'emoji-picker-react';
-import { Smile, X } from 'lucide-react';
+import EmojiPicker, { EmojiClickData } from 'emoji-picker-react';
+import { Smile } from 'lucide-react';
 import { cn } from '../utils/cn';
 
 interface EmojiPickerButtonProps {
@@ -13,7 +13,6 @@ const POPULAR_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥'
 
 export function EmojiPickerButton({ onEmojiClick, className, size = 'md' }: EmojiPickerButtonProps) {
   const [showPicker, setShowPicker] = useState(false);
-  const [skinTone, setSkinTone] = useState<SkinTones>(SkinTones.NEUTRAL);
   const pickerRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
@@ -93,15 +92,13 @@ export function EmojiPickerButton({ onEmojiClick, className, size = 'md' }: Emoj
             <div className="relative">
               <EmojiPicker
                 onEmojiClick={handleEmojiClick}
-                skinTone={skinTone}
-                onSkinToneChange={setSkinTone}
                 width={350}
                 height={400}
                 previewConfig={{
                   showPreview: false,
                 }}
                 searchDisabled={false}
-                theme="dark"
+                theme={"dark" as any}
                 lazyLoadEmojis={true}
               />
             </div>
@@ -157,7 +154,7 @@ export function InlineEmojiPicker({ onEmojiClick, className }: { onEmojiClick: (
               height={350}
               previewConfig={{ showPreview: false }}
               searchDisabled={false}
-              theme="dark"
+              theme={"dark" as any}
               lazyLoadEmojis={true}
             />
           </div>

@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Phone, Video, PhoneOff, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useNavigate } from 'react-router-dom';
 
 interface CallNotificationProps {
   callData: {
@@ -27,7 +26,6 @@ export default function CallNotification({
   onDismiss,
   timeout = 30000,
 }: CallNotificationProps) {
-  const navigate = useNavigate();
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 

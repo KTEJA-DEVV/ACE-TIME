@@ -456,6 +456,14 @@ export const setupSocketHandlers = (io: Server) => {
             transcript.wordCount = transcript.fullText.split(/\s+/).filter(w => w.length > 0).length;
             await transcript.save();
           }
+
+          // Trigger comprehensive notes generation (async, don't block)
+          if (transcript && transcript.segments && transcript.segments.length > 0) {
+            // Import and call the comprehensive notes generation
+            // This will be handled by the API endpoint when frontend requests it
+            // or we can trigger it here directly
+            console.log('[NOTES] Call ended, comprehensive notes can be generated via API');
+          }
         }
       }
 

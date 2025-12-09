@@ -102,45 +102,100 @@ export default function VideoParticipant({
     
     if (shouldShowVideo && stream && videoTrack) {
       // CRITICAL: Always set srcObject when stream changes
-      if (videoElement.srcObject !== stream) {
-        console.log('[VIDEO PARTICIPANT] 🔄 Setting new video stream');
-        videoElement.srcObject = null; // Clear first to force update
-        setTimeout(() => {
+      const currentSrcObject = videoElement.srcObject as MediaStream | null;
+      const streamChanged = !currentSrcObject || currentSrcObject.id !== stream.id;
+      
+      if (streamChanged) {
+        console.log('[VIDEO PARTICIPANT] 🔄 Setting new video stream:', {
+          oldStreamId: currentSrcObject?.id,
+          newStreamId: stream.id,
+          userName,
+          isLocal,
+        });
+        
+        // Clear first to force update
+        videoElement.srcObject = null;
+        
+        // Use requestAnimationFrame for better timing
+        requestAnimationFrame(() => {
           if (videoElement && stream) {
+            // CRITICAL: Set srcObject
             videoElement.srcObject = stream;
-            console.log('[VIDEO PARTICIPANT] ✅ Stream attached to video element');
+            console.log('[VIDEO PARTICIPANT] ✅ Stream attached to video element:', {
+              streamId: stream.id,
+              videoTracks: stream.getVideoTracks().length,
+              audioTracks: stream.getAudioTracks().length,
+              userName,
+            });
             
-            // Force play
-            const playPromise = videoElement.play();
-            if (playPromise !== undefined) {
-              playPromise
+            // CRITICAL: For remote streams, ensure NOT muted
+            if (!isLocal && videoElement.muted) {
+              console.warn('[VIDEO PARTICIPANT] ⚠️ Remote video is muted, unmuting...');
+              videoElement.muted = false;
+            }
+            
+            // Force play with retry logic
+            const attemptPlay = (retries = 3): Promise<void> => {
+              return videoElement.play()
                 .then(() => {
-                  console.log('[VIDEO PARTICIPANT] ✅ Video playing successfully');
+                  console.log('[VIDEO PARTICIPANT] ✅ Video playing successfully:', {
+                    userName,
+                    isLocal,
+                    currentTime: videoElement.currentTime,
+                    readyState: videoElement.readyState,
+                  });
                   setIsVideoPlaying(true);
                 })
                 .catch((error) => {
-                  console.error('[VIDEO PARTICIPANT] ❌ Play error:', error);
-                  // Retry play
-                  setTimeout(() => {
-                    if (videoElement && !videoElement.paused) {
-                      videoElement.play().catch(console.error);
-                    }
-                  }, 100);
+                  console.error('[VIDEO PARTICIPANT] ❌ Play error:', {
+                    userName,
+                    error: error.message,
+                    retries,
+                  });
+                  
+                  if (retries > 0) {
+                    console.log('[VIDEO PARTICIPANT] 🔄 Retrying play, attempts left:', retries);
+                    return new Promise((resolve) => {
+                      setTimeout(() => {
+                        attemptPlay(retries - 1).then(resolve).catch(resolve);
+                      }, 200);
+                    });
+                  } else {
+                    console.error('[VIDEO PARTICIPANT] ❌ All play attempts failed');
+                  }
                 });
-            }
+            };
+            
+            attemptPlay();
           }
-        }, 10);
+        });
       } else {
         // Stream already attached, ensure it's playing
+        console.log('[VIDEO PARTICIPANT] Stream already attached, checking playback state:', {
+          userName,
+          paused: videoElement.paused,
+          readyState: videoElement.readyState,
+          muted: videoElement.muted,
+        });
+        
+        // CRITICAL: For remote streams, ensure NOT muted
+        if (!isLocal && videoElement.muted) {
+          console.warn('[VIDEO PARTICIPANT] ⚠️ Remote video is muted, unmuting...');
+          videoElement.muted = false;
+        }
+        
         if (videoElement.paused || videoElement.readyState < 2) {
           console.log('[VIDEO PARTICIPANT] Video paused or not ready, attempting play');
           videoElement.play()
             .then(() => {
-              console.log('[VIDEO PARTICIPANT] ✅ Video resumed');
+              console.log('[VIDEO PARTICIPANT] ✅ Video resumed:', userName);
               setIsVideoPlaying(true);
             })
             .catch((error) => {
-              console.error('[VIDEO PARTICIPANT] Resume error:', error);
+              console.error('[VIDEO PARTICIPANT] Resume error:', {
+                userName,
+                error: error.message,
+              });
             });
         } else {
           setIsVideoPlaying(true);
@@ -234,6 +289,7 @@ export default function VideoParticipant({
             videoWidth: videoRef.current?.videoWidth,
             videoHeight: videoRef.current?.videoHeight,
             readyState: videoRef.current?.readyState,
+            muted: videoRef.current?.muted,
           });
           const video = videoRef.current;
           if (video) {

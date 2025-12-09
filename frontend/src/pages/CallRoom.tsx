@@ -15,9 +15,18 @@ import {
   Clock,
   Smile,
   FileText,
+  StickyNote,
   Reply,
   Forward,
   AtSign,
+  Bot,
+  ThumbsUp,
+  CheckCircle,
+  Download,
+  Share2,
+  Calendar,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { useAuthStore } from '../store/auth';
 import { useCallStore } from '../store/call';
@@ -79,6 +88,12 @@ export default function CallRoom() {
     maximizeCall,
   } = callStore;
 
+  // Comprehensive notes state
+  const [comprehensiveNotes, setComprehensiveNotes] = useState<any>(null);
+  const [notesLoading, setNotesLoading] = useState(false);
+  const [notesGenerating, setNotesGenerating] = useState(false);
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
+
   // Calculate call duration from start time (persists across navigation)
   const [callDuration, setCallDuration] = useState(0);
   const [copied, setCopied] = useState(false);
@@ -114,6 +129,9 @@ export default function CallRoom() {
     attachments?: Array<{ type: string; url: string; name: string }>;
     reactions?: Array<{ emoji: string; userId: string }>;
     createdAt: string;
+    isAI?: boolean;
+    aiStreaming?: boolean;
+    requestedBy?: string;
   }>>([]);
   const [newChatMessage, setNewChatMessage] = useState('');
   const [callConversationId, setCallConversationId] = useState<string | null>(null);
@@ -121,6 +139,7 @@ export default function CallRoom() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [longPressTimer, setLongPressTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
+  const [, setAiStreamingMessageId] = useState<string | null>(null);
   const chatFileInputRef = useRef<HTMLInputElement>(null);
   
   // Private message notification state
@@ -270,6 +289,68 @@ export default function CallRoom() {
       fetchHistoricalTranscript();
     }
   }, [callId, accessToken, callStatus]);
+
+  // Fetch comprehensive notes when call ends or notes tab is active
+  const fetchComprehensiveNotes = async () => {
+    if (!callId || !accessToken) return;
+    
+    setNotesLoading(true);
+    try {
+      const response = await fetch(`${API_URL}/api/calls/${callId}/notes`, {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.notes) {
+          setComprehensiveNotes(data.notes);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching notes:', error);
+    } finally {
+      setNotesLoading(false);
+    }
+  };
+
+  // Generate comprehensive notes
+  const generateComprehensiveNotes = async () => {
+    if (!callId || !accessToken) return;
+
+    setNotesGenerating(true);
+    try {
+      const response = await fetch(`${API_URL}/api/calls/${callId}/generate-notes`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setComprehensiveNotes(data.notes);
+        toast.success('Notes Generated', 'Comprehensive meeting notes have been generated');
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        toast.error('Generation Failed', errorData.error || 'Failed to generate notes');
+      }
+    } catch (error: any) {
+      console.error('Error generating notes:', error);
+      toast.error('Error', 'Failed to generate notes. Please try again.');
+    } finally {
+      setNotesGenerating(false);
+    }
+  };
+
+  // Auto-fetch notes when call ends or notes tab is active
+  useEffect(() => {
+    if (callId && accessToken && (callStatus === 'ended' || activeRightTab === 'notes')) {
+      fetchComprehensiveNotes();
+    }
+  }, [callId, accessToken, callStatus, activeRightTab]);
   
   // Responsive breakpoint detection
   useEffect(() => {
@@ -296,7 +377,7 @@ export default function CallRoom() {
     if (transcriptRef.current && transcript.length > 0) {
       // Auto-scroll transcript to latest entry
       if (transcriptRef.current) {
-        transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
+      transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
       }
     }
   }, [transcript]);
@@ -1259,7 +1340,77 @@ export default function CallRoom() {
                   </div>
                 </div>
               ) : (
-                chatMessages.map((msg) => (
+                chatMessages.map((msg) => {
+                  // AI Message Component
+                  if (msg.isAI) {
+                    return (
+                      <div key={msg._id} className="flex justify-start animate-fade-in mb-3">
+                        <div className="max-w-[85%] rounded-xl px-4 py-3 bg-gradient-to-br from-purple-500/20 via-blue-500/20 to-cyan-500/20 border border-purple-500/30 glass-card hover:from-purple-500/25 hover:via-blue-500/25 hover:to-cyan-500/25 transition-all group relative">
+                          {/* AI Avatar */}
+                          <div className="flex items-start space-x-3">
+                            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-cyan-500 flex items-center justify-center flex-shrink-0 shadow-lg">
+                              <Bot className="w-5 h-5 text-white" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              {/* Message Header */}
+                              <div className="flex items-center space-x-2 mb-1.5">
+                                <span className="text-purple-300 font-semibold text-sm">AceTime AI</span>
+                                <span className="px-2 py-0.5 bg-purple-500/30 text-purple-200 text-xs rounded-full border border-purple-400/50">
+                                  AI Response
+                                </span>
+                                {msg.requestedBy && msg.requestedBy !== 'You' && (
+                                  <span className="text-dark-400 text-xs">for @{msg.requestedBy}</span>
+                                )}
+                              </div>
+                              {/* Message Text */}
+                              <div className="text-white text-sm leading-relaxed">
+                                {msg.content || (msg.aiStreaming ? (
+                                  <span className="flex items-center space-x-2">
+                                    <Loader2 className="w-4 h-4 animate-spin text-purple-400" />
+                                    <span className="text-purple-300">AI is thinking...</span>
+                                  </span>
+                                ) : '')}
+                                {msg.aiStreaming && (
+                                  <span className="inline-block w-2 h-4 bg-purple-400 ml-1 animate-pulse" />
+                                )}
+                              </div>
+                              {/* Message Actions */}
+                              <div className="flex items-center space-x-2 mt-2 pt-2 border-t border-purple-500/20">
+                                <button
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(msg.content);
+                                    toast.success('Copied', 'AI response copied to clipboard');
+                                  }}
+                                  className="flex items-center space-x-1 px-2 py-1 text-xs text-purple-300 hover:text-purple-200 hover:bg-purple-500/20 rounded transition"
+                                  title="Copy"
+                                >
+                                  <Copy className="w-3 h-3" />
+                                  <span>Copy</span>
+                                </button>
+                                <button
+                                  className="flex items-center space-x-1 px-2 py-1 text-xs text-purple-300 hover:text-purple-200 hover:bg-purple-500/20 rounded transition"
+                                  title="Helpful"
+                                >
+                                  <ThumbsUp className="w-3 h-3" />
+                                  <span>Helpful</span>
+                                </button>
+                              </div>
+                              {/* Timestamp */}
+                              <div className="text-dark-400 text-xs mt-1">
+                                {new Date(msg.createdAt).toLocaleTimeString([], {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  // Regular Message Component
+                  return (
                   <div
                     key={msg._id}
                     className={`flex ${msg.senderId._id === user?._id ? 'justify-end' : 'justify-start'} animate-fade-in`}
@@ -1400,74 +1551,122 @@ export default function CallRoom() {
                       </div>
                     </div>
                   </div>
-                ))
+                );
+                })
               )}
             </div>
-            {/* Chat Input - Only show in Chat tab, with proper spacing to avoid overlap */}
-            {activeRightTab === 'chat' && (
-              <div className="p-4 border-t border-dark-800/50 bg-dark-900/95 backdrop-blur-sm">
-                {selectedFiles.length > 0 && (
-                  <div className="mb-2 flex flex-wrap gap-2">
-                    {selectedFiles.map((file, idx) => (
-                      <div key={idx} className="flex items-center space-x-2 bg-dark-800 rounded-lg p-2">
-                        {file.type.startsWith('image/') ? (
-                          <ImageIcon className="w-4 h-4 text-primary-400" />
-                        ) : (
-                          <Paperclip className="w-4 h-4 text-primary-400" />
-                        )}
-                        <span className="text-sm text-dark-300 truncate max-w-[150px]">{file.name}</span>
-                        <button
-                          onClick={() => setSelectedFiles(selectedFiles.filter((_, i) => i !== idx))}
-                          className="text-dark-500 hover:text-dark-300"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div className="flex items-center space-x-2">
-                  <input
-                    ref={chatFileInputRef}
-                    type="file"
-                    multiple
-                    onChange={handleChatFileSelect}
-                    className="hidden"
-                    accept="image/*,audio/*,.pdf,.doc,.docx"
-                  />
+            {/* Quick AI Actions */}
+            {activeRightTab === 'chat' && (callStatus === 'active' || callStatus === 'waiting') && (
+              <div className="px-4 py-2 border-t border-dark-800/50 bg-dark-900/50 backdrop-blur-sm">
+                <div className="flex items-center space-x-2 overflow-x-auto scrollbar-hide pb-2">
+                  <span className="text-xs text-dark-400 font-medium flex-shrink-0">Quick AI:</span>
                   <button
-                    onClick={() => chatFileInputRef.current?.click()}
-                    className="p-2 bg-dark-800/50 hover:bg-dark-700/50 rounded-lg transition"
-                    title="Attach file"
+                    onClick={() => setNewChatMessage('/ai summarize this call')}
+                    className="px-3 py-1.5 bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 text-xs rounded-lg border border-purple-500/30 transition flex items-center space-x-1.5 flex-shrink-0"
                   >
-                    <Paperclip className="w-4 h-4 text-dark-400" />
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>Summarize</span>
                   </button>
-                  <input
-                    type="text"
-                    value={newChatMessage}
-                    onChange={(e) => setNewChatMessage(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && !uploading && sendChatMessage()}
-                    placeholder="Type a message..."
-                    className="flex-1 px-3 py-2 bg-dark-800/50 border border-dark-700 rounded-lg text-white text-sm placeholder-dark-500 focus:outline-none focus:border-blue-500/50 glass-card"
-                    disabled={uploading}
-                  />
                   <button
-                    onClick={sendChatMessage}
-                    disabled={uploading || (!newChatMessage.trim() && selectedFiles.length === 0)}
-                    className="p-2 bg-blue-500 hover:bg-blue-600 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    onClick={() => setNewChatMessage('/ai what are the action items?')}
+                    className="px-3 py-1.5 bg-green-500/20 hover:bg-green-500/30 text-green-300 text-xs rounded-lg border border-green-500/30 transition flex items-center space-x-1.5 flex-shrink-0"
                   >
-                    {uploading ? (
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    ) : (
-                      <Send className="w-4 h-4 text-white" />
-                    )}
+                    <CheckCircle className="w-3.5 h-3.5" />
+                    <span>Action Items</span>
+                  </button>
+                  <button
+                    onClick={() => setNewChatMessage('/ai generate meeting notes')}
+                    className="px-3 py-1.5 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 text-xs rounded-lg border border-blue-500/30 transition flex items-center space-x-1.5 flex-shrink-0"
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>Notes</span>
+                  </button>
+                  <button
+                    onClick={() => setNewChatMessage('/ai key decisions made')}
+                    className="px-3 py-1.5 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 text-xs rounded-lg border border-yellow-500/30 transition flex items-center space-x-1.5 flex-shrink-0"
+                  >
+                    <CheckCircle className="w-3.5 h-3.5" />
+                    <span>Decisions</span>
                   </button>
                 </div>
               </div>
             )}
+            {/* Chat Input - Only show in Chat tab AND when call is active/waiting */}
+            {activeRightTab === 'chat' && (callStatus === 'active' || callStatus === 'waiting') && (
+              <div className="p-4 border-t border-dark-800/50 bg-dark-900/95 backdrop-blur-sm">
+              {selectedFiles.length > 0 && (
+                <div className="mb-2 flex flex-wrap gap-2">
+                  {selectedFiles.map((file, idx) => (
+                    <div key={idx} className="flex items-center space-x-2 bg-dark-800 rounded-lg p-2">
+                      {file.type.startsWith('image/') ? (
+                        <ImageIcon className="w-4 h-4 text-primary-400" />
+                      ) : (
+                        <Paperclip className="w-4 h-4 text-primary-400" />
+                      )}
+                      <span className="text-sm text-dark-300 truncate max-w-[150px]">{file.name}</span>
+                      <button
+                        onClick={() => setSelectedFiles(selectedFiles.filter((_, i) => i !== idx))}
+                        className="text-dark-500 hover:text-dark-300"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-center space-x-2">
+                <input
+                  ref={chatFileInputRef}
+                  type="file"
+                  multiple
+                  onChange={handleChatFileSelect}
+                  className="hidden"
+                  accept="image/*,audio/*,.pdf,.doc,.docx"
+                />
+                <button
+                  onClick={() => chatFileInputRef.current?.click()}
+                  className="p-2 bg-dark-800/50 hover:bg-dark-700/50 rounded-lg transition"
+                  title="Attach file"
+                >
+                  <Paperclip className="w-4 h-4 text-dark-400" />
+                </button>
+                <input
+                  type="text"
+                  value={newChatMessage}
+                  onChange={(e) => setNewChatMessage(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && !uploading && sendChatMessage()}
+                    placeholder="Type a message or /ai [command]..."
+                  className="flex-1 px-3 py-2 bg-dark-800/50 border border-dark-700 rounded-lg text-white text-sm placeholder-dark-500 focus:outline-none focus:border-blue-500/50 glass-card"
+                  disabled={uploading}
+                />
+                <button
+                  onClick={sendChatMessage}
+                  disabled={uploading || (!newChatMessage.trim() && selectedFiles.length === 0)}
+                  className="p-2 bg-blue-500 hover:bg-blue-600 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {uploading ? (
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <Send className="w-4 h-4 text-white" />
+                  )}
+                </button>
+              </div>
+            </div>
+            )}
           </div>
         );
       case 'transcript':
+        // Only show transcript during/after calls
+        if (callStatus !== 'active' && callStatus !== 'ended' && callStatus !== 'waiting') {
+        return (
+            <div className="h-full flex items-center justify-center text-center">
+              <div>
+                <MessageSquare className="w-12 h-12 text-dark-700 mx-auto mb-2" />
+                <p className="text-dark-500 text-sm">Transcript will appear here once the call starts</p>
+              </div>
+            </div>
+          );
+        }
         return (
           <div className="h-full flex flex-col overflow-hidden">
             <div className="px-4 py-3 border-b border-dark-800/50 flex items-center justify-between glass-card sticky top-0 z-10 bg-dark-900/95 backdrop-blur-xl">
@@ -1558,17 +1757,22 @@ export default function CallRoom() {
                 </>
               )}
             </div>
-          </div>
-        );
-      case 'notes':
-        return (
-          <div className="h-full overflow-y-auto p-4">
-            <div className="flex items-center space-x-2 mb-3">
+            
+            {/* AI Insights Section - Show below transcript */}
+            {aiNotes && (callStatus === 'active' || callStatus === 'ended') && (
+              <div className="border-t border-dark-800/50 bg-dark-900/50 backdrop-blur-sm">
+                <div className="px-4 py-3 border-b border-dark-800/50 flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
               <Sparkles className="w-4 h-4 text-purple-400" />
-              <span className="text-white font-semibold text-sm">AI Meeting Notes</span>
+                    <span className="text-white font-semibold text-sm">AI Insights</span>
+                    {aiNotes.lastUpdated && (
+                      <span className="text-dark-400 text-xs">
+                        Updated {new Date(aiNotes.lastUpdated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    )}
             </div>
-            {aiNotes ? (
-              <div className="space-y-4">
+                </div>
+                <div className="p-4 space-y-3 max-h-[300px] overflow-y-auto">
                 {aiNotes.summary && (
                   <div className="glass-card rounded-lg p-3 border border-purple-500/20">
                     <h4 className="text-xs font-semibold text-purple-300 mb-2 uppercase tracking-wide flex items-center space-x-1">
@@ -1578,41 +1782,388 @@ export default function CallRoom() {
                     <p className="text-white text-sm leading-relaxed">{aiNotes.summary}</p>
                   </div>
                 )}
+                  
+                  {aiNotes.bullets && aiNotes.bullets.length > 0 && (
+                    <div className="glass-card rounded-lg p-3 border border-primary-500/20">
+                      <h4 className="text-xs font-semibold text-primary-300 mb-2 uppercase tracking-wide">Key Points</h4>
+                      <ul className="space-y-1.5">
+                        {aiNotes.bullets.map((point, idx) => (
+                          <li key={idx} className="text-white text-sm flex items-start space-x-2">
+                            <span className="text-primary-400 mt-1">•</span>
+                            <span>{point}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  
                 {aiNotes.actionItems && aiNotes.actionItems.length > 0 && (
                   <div className="glass-card rounded-lg p-3 border border-green-500/20">
                     <h4 className="text-xs font-semibold text-green-300 mb-2 uppercase tracking-wide">Action Items</h4>
                     <ul className="space-y-1.5">
                       {aiNotes.actionItems.map((item, idx) => (
                         <li key={idx} className="text-white text-sm flex items-start space-x-2">
-                          <span className="text-green-400 mt-1">•</span>
-                          <span>{item.text}{item.assignee && ` (${item.assignee})`}</span>
+                            <span className="text-green-400 mt-1">✓</span>
+                            <span>{item.text}{item.assignee && <span className="text-green-300"> ({item.assignee})</span>}</span>
                         </li>
                       ))}
                     </ul>
                   </div>
                 )}
+                  
+                  {aiNotes.decisions && aiNotes.decisions.length > 0 && (
+                    <div className="glass-card rounded-lg p-3 border border-blue-500/20">
+                      <h4 className="text-xs font-semibold text-blue-300 mb-2 uppercase tracking-wide">Decisions Made</h4>
+                      <ul className="space-y-1.5">
+                        {aiNotes.decisions.map((decision, idx) => (
+                          <li key={idx} className="text-white text-sm flex items-start space-x-2">
+                            <span className="text-blue-400 mt-1">→</span>
+                            <span>{decision}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  
                 {aiNotes.keyTopics && aiNotes.keyTopics.length > 0 && (
-                  <div className="glass-card rounded-lg p-3">
-                    <h4 className="text-xs font-semibold text-dark-300 mb-2 uppercase tracking-wide">Key Topics</h4>
+                    <div className="glass-card rounded-lg p-3 border border-yellow-500/20">
+                      <h4 className="text-xs font-semibold text-yellow-300 mb-2 uppercase tracking-wide">Topics Discussed</h4>
                     <div className="flex flex-wrap gap-1.5">
                       {aiNotes.keyTopics.map((topic, idx) => (
-                        <span
-                          key={idx}
-                          className="px-2 py-0.5 bg-primary-500/20 text-primary-300 text-xs rounded border border-primary-500/30"
-                        >
+                          <span key={idx} className="px-2 py-1 bg-yellow-500/20 text-yellow-300 text-xs rounded-full border border-yellow-500/30">
                           {topic}
                         </span>
                       ))}
                     </div>
                   </div>
                 )}
+                  
+                  {aiNotes.suggestedReplies && aiNotes.suggestedReplies.length > 0 && (
+                    <div className="glass-card rounded-lg p-3 border border-cyan-500/20">
+                      <h4 className="text-xs font-semibold text-cyan-300 mb-2 uppercase tracking-wide">Next Steps</h4>
+                      <ul className="space-y-1.5">
+                        {aiNotes.suggestedReplies.map((step, idx) => (
+                          <li key={idx} className="text-white text-sm flex items-start space-x-2">
+                            <span className="text-cyan-400 mt-1">→</span>
+                            <span>{step}</span>
+                          </li>
+                        ))}
+                      </ul>
               </div>
-            ) : (
-              <div className="text-center py-8">
-                <AIThinking className="justify-center" />
-                <p className="text-dark-500 text-sm mt-4">AI notes will appear here as the conversation progresses...</p>
+                  )}
+                </div>
               </div>
             )}
+          </div>
+        );
+      case 'notes':
+        return (
+          <div className="h-full overflow-y-auto">
+            {/* Notes Header */}
+            <div className="sticky top-0 z-10 bg-dark-900/95 backdrop-blur-xl border-b border-dark-800/50 px-4 py-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center space-x-2">
+                  <Sparkles className="w-5 h-5 text-purple-400" />
+                  <h1 className="text-white font-bold text-lg">
+                    {comprehensiveNotes?.title || 'Meeting Notes'}
+                  </h1>
+                </div>
+                <div className="flex items-center space-x-2">
+                  {!comprehensiveNotes && callStatus === 'ended' && (
+                    <button
+                      onClick={generateComprehensiveNotes}
+                      disabled={notesGenerating}
+                      className="px-3 py-1.5 bg-purple-500 hover:bg-purple-600 text-white text-xs rounded-lg transition disabled:opacity-50 flex items-center space-x-1.5"
+                    >
+                      {notesGenerating ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Generating...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>Generate Notes</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                  {comprehensiveNotes && (
+                    <>
+                      <button
+                        onClick={() => {
+                          // Export functionality will be added
+                          toast.info('Export', 'Export functionality coming soon');
+                        }}
+                        className="p-2 bg-dark-800/50 hover:bg-dark-700/50 rounded-lg transition"
+                        title="Export"
+                      >
+                        <Download className="w-4 h-4 text-dark-300" />
+                      </button>
+                      <button
+                        onClick={() => {
+                          // Share functionality will be added
+                          toast.info('Share', 'Share functionality coming soon');
+                        }}
+                        className="p-2 bg-dark-800/50 hover:bg-dark-700/50 rounded-lg transition"
+                        title="Share"
+                      >
+                        <Share2 className="w-4 h-4 text-dark-300" />
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+              {comprehensiveNotes && (
+                <div className="flex items-center space-x-4 text-xs text-dark-400">
+                  <span className="flex items-center space-x-1">
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>{new Date(comprehensiveNotes.date).toLocaleDateString()}</span>
+                  </span>
+                  <span>{Math.round((comprehensiveNotes.duration || 0) / 60)} minutes</span>
+                  <span className="flex items-center space-x-1">
+                    <Users className="w-3.5 h-3.5" />
+                    <span>{comprehensiveNotes.participants?.length || 0} participants</span>
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Notes Content */}
+            <div className="p-4 space-y-6">
+              {notesLoading ? (
+                <div className="text-center py-12">
+                  <Loader2 className="w-8 h-8 animate-spin text-purple-400 mx-auto mb-3" />
+                  <p className="text-dark-400 text-sm">Loading notes...</p>
+                </div>
+              ) : comprehensiveNotes ? (
+                <>
+                  {/* Summary Section */}
+                  {comprehensiveNotes.summary && (
+                    <section className="glass-card rounded-lg p-4 border border-purple-500/20">
+                      <h2 className="text-white font-semibold text-base mb-3 flex items-center space-x-2">
+                        <Sparkles className="w-4 h-4 text-purple-400" />
+                        <span>Summary</span>
+                      </h2>
+                      <p className="text-white text-sm leading-relaxed">{comprehensiveNotes.summary}</p>
+                    </section>
+                  )}
+
+                  {/* Action Items Section */}
+                  {comprehensiveNotes.actionItems && comprehensiveNotes.actionItems.length > 0 && (
+                    <section className="glass-card rounded-lg p-4 border border-green-500/20">
+                      <h2 className="text-white font-semibold text-base mb-3 flex items-center space-x-2">
+                        <CheckCircle className="w-4 h-4 text-green-400" />
+                        <span>Action Items ({comprehensiveNotes.actionItems.length})</span>
+                      </h2>
+                      <div className="space-y-3">
+                        {comprehensiveNotes.actionItems.map((item: any, idx: number) => (
+                          <div key={idx} className="flex items-start space-x-3 p-3 bg-dark-800/30 rounded-lg hover:bg-dark-800/50 transition">
+                            <input
+                              type="checkbox"
+                              checked={item.completed || false}
+                              className="mt-1 w-4 h-4 rounded border-dark-600 bg-dark-700 text-green-500 focus:ring-green-500"
+                              readOnly
+                            />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-white text-sm">{item.text}</p>
+                              <div className="flex items-center space-x-3 mt-2 text-xs">
+                                {item.assignee && (
+                                  <span className="text-green-300">@{item.assignee}</span>
+                                )}
+                                {item.dueDate && (
+                                  <span className="text-dark-400">
+                                    Due: {new Date(item.dueDate).toLocaleDateString()}
+                                  </span>
+                                )}
+                                {item.priority && (
+                                  <span className={`px-2 py-0.5 rounded ${
+                                    item.priority === 'high' ? 'bg-red-500/20 text-red-300' :
+                                    item.priority === 'medium' ? 'bg-yellow-500/20 text-yellow-300' :
+                                    'bg-blue-500/20 text-blue-300'
+                                  }`}>
+                                    {item.priority}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  {/* Decisions Section */}
+                  {comprehensiveNotes.decisions && comprehensiveNotes.decisions.length > 0 && (
+                    <section className="glass-card rounded-lg p-4 border border-blue-500/20">
+                      <h2 className="text-white font-semibold text-base mb-3 flex items-center space-x-2">
+                        <CheckCircle className="w-4 h-4 text-blue-400" />
+                        <span>Key Decisions</span>
+                      </h2>
+                      <div className="space-y-3">
+                        {comprehensiveNotes.decisions.map((decision: any, idx: number) => (
+                          <div key={idx} className="p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
+                            <p className="text-white text-sm font-medium mb-1">{decision.decision}</p>
+                            {decision.context && (
+                              <p className="text-dark-300 text-xs mb-2">{decision.context}</p>
+                            )}
+                            <span className="text-dark-400 text-xs">{decision.timestamp}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  {/* Discussion Topics Section */}
+                  {comprehensiveNotes.sections && comprehensiveNotes.sections.length > 0 && (
+                    <section className="glass-card rounded-lg p-4 border border-yellow-500/20">
+                      <h2 className="text-white font-semibold text-base mb-3 flex items-center space-x-2">
+                        <MessageSquare className="w-4 h-4 text-yellow-400" />
+                        <span>Discussion Topics</span>
+                      </h2>
+                      <div className="space-y-4">
+                        {comprehensiveNotes.sections.map((section: any, idx: number) => {
+                          const isExpanded = expandedSections.has(`section-${idx}`);
+                          return (
+                            <div key={idx} className="border border-dark-700 rounded-lg overflow-hidden">
+                              <button
+                                onClick={() => {
+                                  const newExpanded = new Set(expandedSections);
+                                  if (isExpanded) {
+                                    newExpanded.delete(`section-${idx}`);
+                                  } else {
+                                    newExpanded.add(`section-${idx}`);
+                                  }
+                                  setExpandedSections(newExpanded);
+                                }}
+                                className="w-full flex items-center justify-between p-3 bg-dark-800/30 hover:bg-dark-800/50 transition"
+                              >
+                                <div className="flex items-center space-x-2">
+                                  <h3 className="text-white font-medium text-sm">{section.topic}</h3>
+                                  <span className="text-dark-400 text-xs">{section.timestamp}</span>
+                                </div>
+                                {isExpanded ? (
+                                  <ChevronUp className="w-4 h-4 text-dark-400" />
+                                ) : (
+                                  <ChevronDown className="w-4 h-4 text-dark-400" />
+                                )}
+                              </button>
+                              {isExpanded && (
+                                <div className="p-3 space-y-2">
+                                  <ul className="space-y-1.5">
+                                    {section.notes.map((note: string, noteIdx: number) => (
+                                      <li key={noteIdx} className="text-white text-sm flex items-start space-x-2">
+                                        <span className="text-yellow-400 mt-1">•</span>
+                                        <span>{note}</span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                  {section.relatedTranscript && (
+                                    <details className="mt-3">
+                                      <summary className="text-dark-400 text-xs cursor-pointer hover:text-dark-300">
+                                        View related transcript
+                                      </summary>
+                                      <p className="text-dark-300 text-xs mt-2 p-2 bg-dark-800/50 rounded italic">
+                                        {section.relatedTranscript}
+                                      </p>
+                                    </details>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  )}
+
+                  {/* Key Points */}
+                  {comprehensiveNotes.keyPoints && comprehensiveNotes.keyPoints.length > 0 && (
+                    <section className="glass-card rounded-lg p-4 border border-primary-500/20">
+                      <h2 className="text-white font-semibold text-base mb-3">Key Points</h2>
+                      <ul className="space-y-2">
+                        {comprehensiveNotes.keyPoints.map((point: string, idx: number) => (
+                          <li key={idx} className="text-white text-sm flex items-start space-x-2">
+                            <span className="text-primary-400 mt-1">•</span>
+                            <span>{point}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
+
+                  {/* Questions Raised */}
+                  {comprehensiveNotes.questionsRaised && comprehensiveNotes.questionsRaised.length > 0 && (
+                    <section className="glass-card rounded-lg p-4 border border-cyan-500/20">
+                      <h2 className="text-white font-semibold text-base mb-3">Questions Raised</h2>
+                      <ul className="space-y-2">
+                        {comprehensiveNotes.questionsRaised.map((question: string, idx: number) => (
+                          <li key={idx} className="text-white text-sm flex items-start space-x-2">
+                            <span className="text-cyan-400 mt-1">?</span>
+                            <span>{question}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
+
+                  {/* Next Steps */}
+                  {comprehensiveNotes.nextSteps && comprehensiveNotes.nextSteps.length > 0 && (
+                    <section className="glass-card rounded-lg p-4 border border-purple-500/20">
+                      <h2 className="text-white font-semibold text-base mb-3">Next Steps</h2>
+                      <ul className="space-y-2 mb-4">
+                        {comprehensiveNotes.nextSteps.map((step: string, idx: number) => (
+                          <li key={idx} className="text-white text-sm flex items-start space-x-2">
+                            <span className="text-purple-400 mt-1">→</span>
+                            <span>{step}</span>
+                          </li>
+                        ))}
+                      </ul>
+                      {comprehensiveNotes.suggestedFollowUp && (
+                        <div className="flex items-center justify-between p-3 bg-purple-500/10 rounded-lg border border-purple-500/20">
+                          <div className="flex items-center space-x-2">
+                            <Calendar className="w-4 h-4 text-purple-400" />
+                            <p className="text-white text-sm">
+                              Suggested follow-up: {new Date(comprehensiveNotes.suggestedFollowUp).toLocaleDateString()}
+                            </p>
+                          </div>
+                          <button className="px-3 py-1.5 bg-purple-500 hover:bg-purple-600 text-white text-xs rounded-lg transition">
+                            Schedule
+                          </button>
+                        </div>
+                      )}
+                    </section>
+                  )}
+                </>
+              ) : callStatus === 'ended' ? (
+                <div className="text-center py-12">
+                  <FileText className="w-12 h-12 text-dark-700 mx-auto mb-3" />
+                  <p className="text-dark-400 text-sm mb-4">No comprehensive notes available</p>
+                  <button
+                    onClick={generateComprehensiveNotes}
+                    disabled={notesGenerating}
+                    className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white text-sm rounded-lg transition disabled:opacity-50 flex items-center space-x-2 mx-auto"
+                  >
+                    {notesGenerating ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Generating...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-4 h-4" />
+                        <span>Generate Meeting Notes</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              ) : (
+                <div className="text-center py-12">
+                <AIThinking className="justify-center" />
+                  <p className="text-dark-500 text-sm mt-4">Comprehensive notes will be available after the call ends</p>
+              </div>
+            )}
+            </div>
           </div>
         );
       default:
@@ -1620,10 +2171,124 @@ export default function CallRoom() {
     }
   };
 
+  // Handle AI command
+  const handleAICommand = async (command: string) => {
+    if (!accessToken || !callId) return;
+
+    const prompt = command.slice(4).trim(); // Remove "/ai "
+    if (!prompt) {
+      toast.error('AI Command', 'Please provide a command after /ai');
+      return;
+    }
+
+    // Add user message showing the command
+    const userMessageId = `ai-cmd-${Date.now()}`;
+    setChatMessages(prev => [...prev, {
+      _id: userMessageId,
+      senderId: { _id: user?._id || '', name: user?.name || 'You' },
+      content: `/ai ${prompt}`,
+      createdAt: new Date().toISOString(),
+    }]);
+
+    // Create AI message placeholder
+    const aiMessageId = `ai-response-${Date.now()}`;
+    setChatMessages(prev => [...prev, {
+      _id: aiMessageId,
+      senderId: { _id: 'ai', name: 'AceTime AI' },
+      content: '',
+      isAI: true,
+      aiStreaming: true,
+      requestedBy: user?.name || 'You',
+      createdAt: new Date().toISOString(),
+    }]);
+    setAiStreamingMessageId(aiMessageId);
+
+    try {
+      const response = await fetch(`${API_URL}/api/calls/${callId}/ai-command`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          command: prompt,
+          requestedBy: user?.name || 'You',
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to process AI command');
+      }
+
+      // Handle streaming response
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (data.type === 'chunk' && data.content) {
+                  setChatMessages(prev => prev.map(msg => 
+                    msg._id === aiMessageId
+                      ? { ...msg, content: (msg.content || '') + data.content }
+                      : msg
+                  ));
+                } else if (data.type === 'done') {
+                  setChatMessages(prev => prev.map(msg => 
+                    msg._id === aiMessageId
+                      ? { ...msg, aiStreaming: false }
+                      : msg
+                  ));
+                  setAiStreamingMessageId(null);
+                } else if (data.type === 'error') {
+                  setChatMessages(prev => prev.map(msg => 
+                    msg._id === aiMessageId
+                      ? { ...msg, content: `Error: ${data.error}`, aiStreaming: false }
+                      : msg
+                  ));
+                  setAiStreamingMessageId(null);
+                }
+              } catch (e) {
+                console.error('Error parsing SSE data:', e);
+              }
+            }
+          }
+        }
+      }
+    } catch (error: any) {
+      console.error('AI command error:', error);
+      setChatMessages(prev => prev.map(msg => 
+        msg._id === aiMessageId
+          ? { ...msg, content: 'Failed to get AI response. Please try again.', aiStreaming: false }
+          : msg
+      ));
+      setAiStreamingMessageId(null);
+      toast.error('AI Error', error.message || 'Failed to process AI command');
+    }
+  };
+
   const sendChatMessage = async () => {
     if (!accessToken || (!newChatMessage.trim() && selectedFiles.length === 0) || !callConversationId) return;
 
     const messageContent = newChatMessage.trim();
+
+    // Check if it's an AI command
+    if (messageContent.startsWith('/ai ')) {
+      await handleAICommand(messageContent);
+      setNewChatMessage('');
+      return;
+    }
     
     // Upload files if any
     let attachments: Array<{ type: string; url: string; name: string }> = [];
@@ -1872,21 +2537,21 @@ export default function CallRoom() {
         </div>
       </div>
 
-            {/* Floating Call Controls - Mobile View - Only show in Dream tab (call view) */}
-            {activeRightTab === 'dreamweaving' && (
+            {/* Floating Call Controls - Mobile View - Only show in Dream tab (call view) AND when call is active/waiting */}
+            {activeRightTab === 'dreamweaving' && (callStatus === 'active' || callStatus === 'waiting') && (
               <div className={`fixed left-1/2 transform -translate-x-1/2 z-[60] bottom-8`}>
-                <CallControls
-                  isMuted={isMuted}
-                  isVideoOff={isVideoOff}
-                  onToggleMute={toggleMute}
-                  onToggleVideo={toggleVideo}
-                  onEndCall={handleEndCall}
-                  onScreenShare={handleScreenShare}
-                  onAddParticipant={handleAddParticipant}
-                  onSettings={handleSettings}
-                  isScreenSharing={isScreenSharing}
-                />
-              </div>
+              <CallControls
+                isMuted={isMuted}
+                isVideoOff={isVideoOff}
+                onToggleMute={toggleMute}
+                onToggleVideo={toggleVideo}
+                onEndCall={handleEndCall}
+                onScreenShare={handleScreenShare}
+                onAddParticipant={handleAddParticipant}
+                onSettings={handleSettings}
+                isScreenSharing={isScreenSharing}
+              />
+            </div>
             )}
             </div>
 
@@ -1916,8 +2581,8 @@ export default function CallRoom() {
                         )}
                       </div>
                     )}
-                    {tab === 'transcript' && <MessageSquare className="w-4 h-4" />}
-                    {tab === 'notes' && <FileText className="w-4 h-4" />}
+                    {tab === 'transcript' && <FileText className="w-4 h-4" />}
+                    {tab === 'notes' && <StickyNote className="w-4 h-4" />}
                     <span className="capitalize">{tab === 'dreamweaving' ? 'Dream' : tab === 'transcript' ? 'Transcript' : tab}</span>
                   </div>
                 </button>
@@ -2147,24 +2812,24 @@ export default function CallRoom() {
               );
             })()}
 
-            {/* Call Controls - Enhanced with animations and proper spacing - Only show in Dream tab (call view) */}
-            {activeRightTab === 'dreamweaving' && (
+            {/* Call Controls - Enhanced with animations and proper spacing - Only show in Dream tab (call view) AND when call is active/waiting */}
+            {activeRightTab === 'dreamweaving' && (callStatus === 'active' || callStatus === 'waiting') && (
               <div className={`z-[60] ${
                 isMobile ? 'fixed bottom-8 left-1/2 transform -translate-x-1/2' : 
                 'absolute bottom-8 left-1/2 transform -translate-x-1/2'
-              }`}>
-                <CallControls
-                  isMuted={isMuted}
-                  isVideoOff={isVideoOff}
-                  onToggleMute={toggleMute}
-                  onToggleVideo={toggleVideo}
-                  onEndCall={handleEndCall}
-                  onScreenShare={handleScreenShare}
-                  onAddParticipant={handleAddParticipant}
-                  onSettings={handleSettings}
-                  isScreenSharing={isScreenSharing}
-                />
-              </div>
+            }`}>
+              <CallControls
+                isMuted={isMuted}
+                isVideoOff={isVideoOff}
+                onToggleMute={toggleMute}
+                onToggleVideo={toggleVideo}
+                onEndCall={handleEndCall}
+                onScreenShare={handleScreenShare}
+                onAddParticipant={handleAddParticipant}
+                onSettings={handleSettings}
+                isScreenSharing={isScreenSharing}
+              />
+            </div>
             )}
           </div>
         </div>
@@ -2203,8 +2868,8 @@ export default function CallRoom() {
                           )}
                         </div>
                       )}
-                      {tab === 'transcript' && <MessageSquare className="w-4 h-4" />}
-                      {tab === 'notes' && <FileText className="w-4 h-4" />}
+                      {tab === 'transcript' && <FileText className="w-4 h-4" />}
+                      {tab === 'notes' && <StickyNote className="w-4 h-4" />}
                       <span className="hidden sm:inline capitalize">
                         {tab === 'dreamweaving' ? 'Dream' : tab === 'transcript' ? 'Transcript' : tab}
                       </span>

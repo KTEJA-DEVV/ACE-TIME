@@ -103,18 +103,18 @@ export default function CallControls({
           )}
           
           {/* Glass morphism overlay */}
-          <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-full" />
+          <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-full z-0" />
           
           {/* Icon with smooth transition and rotation - Properly centered */}
-          <div className={`relative z-10 flex items-center justify-center transition-all duration-300 ${
+          <div className={`relative z-20 flex items-center justify-center transition-all duration-300 ${
             isMuted 
               ? 'group-hover:scale-110 group-hover:rotate-12' 
               : 'group-hover:scale-110'
           }`}>
             {isMuted ? (
-              <MicOff className="text-white drop-shadow-lg w-6 h-6" />
+              <MicOff className="w-6 h-6 text-white drop-shadow-lg" strokeWidth={2.5} fill="none" stroke="currentColor" style={{ display: 'block', flexShrink: 0, pointerEvents: 'none' }} />
             ) : (
-              <Mic className="text-white drop-shadow-lg w-6 h-6" />
+              <Mic className="w-6 h-6 text-white drop-shadow-lg" strokeWidth={2.5} fill="none" stroke="currentColor" style={{ display: 'block', flexShrink: 0, pointerEvents: 'none' }} />
             )}
           </div>
 
@@ -152,18 +152,18 @@ export default function CallControls({
           )}
           
           {/* Glass morphism overlay */}
-          <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-full" />
+          <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-full z-0" />
           
           {/* Icon with smooth transition - Properly centered */}
-          <div className={`relative z-10 flex items-center justify-center transition-all duration-300 ${
+          <div className={`relative z-20 flex items-center justify-center transition-all duration-300 ${
             isVideoOff 
               ? 'group-hover:scale-110 group-hover:rotate-12' 
               : 'group-hover:scale-110'
           }`}>
             {isVideoOff ? (
-              <VideoOff className="text-white drop-shadow-lg w-6 h-6" />
+              <VideoOff className="w-6 h-6 text-white drop-shadow-lg" strokeWidth={2.5} fill="none" stroke="currentColor" style={{ display: 'block', flexShrink: 0, pointerEvents: 'none' }} />
             ) : (
-              <Video className="text-white drop-shadow-lg w-6 h-6" />
+              <Video className="w-6 h-6 text-white drop-shadow-lg" strokeWidth={2.5} fill="none" stroke="currentColor" style={{ display: 'block', flexShrink: 0, pointerEvents: 'none' }} />
             )}
           </div>
 
@@ -199,13 +199,13 @@ export default function CallControls({
             )}
             
             {/* Glass morphism overlay */}
-            <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-full" />
+            <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-full z-0" />
             
-            <div className="relative z-10 flex items-center justify-center transition-all duration-300 group-hover:scale-110 group-hover:rotate-6">
+            <div className="relative z-20 flex items-center justify-center transition-all duration-300 group-hover:scale-110 group-hover:rotate-6">
               {isScreenSharing ? (
-                <MonitorOff className="text-white drop-shadow-lg w-6 h-6" />
+                <MonitorOff className="w-6 h-6 text-white drop-shadow-lg" strokeWidth={2.5} fill="none" stroke="currentColor" style={{ display: 'block', flexShrink: 0, pointerEvents: 'none' }} />
               ) : (
-                <Monitor className="text-white drop-shadow-lg w-6 h-6" />
+                <Monitor className="w-6 h-6 text-white drop-shadow-lg" strokeWidth={2.5} fill="none" stroke="currentColor" style={{ display: 'block', flexShrink: 0, pointerEvents: 'none' }} />
               )}
             </div>
             <div className="absolute inset-0 rounded-full bg-white/30 scale-0 group-active:scale-150 transition-all duration-500 opacity-0 group-active:opacity-100" />
@@ -239,17 +239,17 @@ export default function CallControls({
               )}
               
               {/* Glass morphism overlay */}
-              <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-full" />
+              <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-full z-0" />
               
-              <div className={`relative z-10 flex items-center justify-center transition-all duration-300 ${
+              <div className={`relative z-20 flex items-center justify-center transition-all duration-300 ${
                 showMoreMenu 
                   ? 'rotate-180' 
                   : 'group-hover:rotate-90'
               }`}>
                 {showMoreMenu ? (
-                  <X className="text-white drop-shadow-lg w-6 h-6" />
+                  <X className="w-6 h-6 text-white drop-shadow-lg" strokeWidth={2.5} fill="none" stroke="currentColor" style={{ display: 'block', flexShrink: 0, pointerEvents: 'none' }} />
                 ) : (
-                  <Settings className="text-white drop-shadow-lg w-6 h-6" />
+                  <Settings className="w-6 h-6 text-white drop-shadow-lg" strokeWidth={2.5} fill="none" stroke="currentColor" style={{ display: 'block', flexShrink: 0, pointerEvents: 'none' }} />
                 )}
               </div>
               <div className="absolute inset-0 rounded-full bg-white/30 scale-0 group-active:scale-150 transition-all duration-500 opacity-0 group-active:opacity-100" />
@@ -268,7 +268,7 @@ export default function CallControls({
                     className="w-full flex items-center space-x-3 px-4 py-3 rounded-xl hover:bg-dark-800/70 transition-all duration-200 text-left group hover:scale-[1.02]"
                   >
                     <div className="p-2 rounded-lg bg-primary-500/20 group-hover:bg-primary-500/30 transition">
-                      <UserPlus className="w-4 h-4 text-primary-400 group-hover:text-primary-300 transition" />
+                      <UserPlus className="w-4 h-4 text-primary-400 group-hover:text-primary-300 transition" fill="none" stroke="currentColor" strokeWidth={2} />
                     </div>
                     <span className="text-white text-sm font-medium">Add Participant</span>
                   </button>
@@ -282,7 +282,7 @@ export default function CallControls({
                     className="w-full flex items-center space-x-3 px-4 py-3 rounded-xl hover:bg-dark-800/70 transition-all duration-200 text-left group hover:scale-[1.02] mt-1"
                   >
                     <div className="p-2 rounded-lg bg-primary-500/20 group-hover:bg-primary-500/30 transition">
-                      <Settings className="w-4 h-4 text-primary-400 group-hover:text-primary-300 transition" />
+                      <Settings className="w-4 h-4 text-primary-400 group-hover:text-primary-300 transition" fill="none" stroke="currentColor" strokeWidth={2} />
                     </div>
                     <span className="text-white text-sm font-medium">Settings</span>
                   </button>
@@ -312,10 +312,10 @@ export default function CallControls({
           <div className="absolute inset-0 rounded-full border border-red-300/60 animate-pulse" style={{ animationDuration: '1.5s' }} />
           
           {/* Glass morphism overlay */}
-          <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-full" />
+          <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-full z-0" />
           
-          <div className="relative z-10 flex items-center justify-center transition-all duration-300 group-hover:rotate-90 group-hover:scale-110">
-            <PhoneOff className="text-white drop-shadow-lg w-6 h-6" />
+          <div className="relative z-20 flex items-center justify-center transition-all duration-300 group-hover:rotate-90 group-hover:scale-110">
+            <PhoneOff className="w-6 h-6 text-white drop-shadow-lg" strokeWidth={2.5} fill="none" stroke="currentColor" style={{ display: 'block', flexShrink: 0, pointerEvents: 'none' }} />
           </div>
 
           {/* Ripple effect */}
@@ -344,12 +344,12 @@ export default function CallControls({
               title="Close"
               aria-label="Close"
             >
-              <X className="w-5 h-5 text-dark-400 hover:text-white transition" />
+              <X className="w-5 h-5 text-dark-400 hover:text-white transition" fill="none" stroke="currentColor" strokeWidth={2} />
             </button>
 
             <div className="flex items-start space-x-4 mb-6 pr-8">
               <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center flex-shrink-0 animate-pulse ring-4 ring-red-500/20">
-                <AlertTriangle className="w-8 h-8 text-red-400" />
+                <AlertTriangle className="w-8 h-8 text-red-400" fill="none" stroke="currentColor" strokeWidth={2} />
               </div>
               <div className="flex-1 min-w-0 pt-1">
                 <h3 className="text-white font-semibold text-xl md:text-2xl mb-3">End Call?</h3>
@@ -372,7 +372,7 @@ export default function CallControls({
                 className="flex-1 px-5 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 rounded-xl text-white font-semibold transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2 shadow-lg shadow-red-500/30 text-base"
                 style={{ height: '48px' }}
               >
-                <PhoneOff className="w-5 h-5" />
+                <PhoneOff className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} />
                 <span>End Call</span>
               </button>
             </div>

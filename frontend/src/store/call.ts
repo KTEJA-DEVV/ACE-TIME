@@ -45,6 +45,7 @@ interface AINotes {
   suggestedReplies: string[];
   keyTopics: string[];
   isFinal?: boolean;
+  lastUpdated?: number;
 }
 
 interface Participant {
@@ -82,6 +83,7 @@ interface CallState {
   transcript: TranscriptSegment[];
   interimTranscript: string; // For showing live interim results
   aiNotes: AINotes | null;
+  aiAnalysisInterval: ReturnType<typeof setInterval> | null; // For periodic AI analysis
   
   isMuted: boolean;
   isVideoOff: boolean;
@@ -100,6 +102,9 @@ interface CallState {
   toggleVideo: () => void;
   sendTranscript: (text: string) => void;
   requestNotes: () => void;
+  startAIAnalysis: () => void;
+  stopAIAnalysis: () => void;
+  analyzeTranscript: (isFinal?: boolean) => Promise<void>;
   startSpeechRecognition: () => void;
   stopSpeechRecognition: () => void;
   startCallRecording: () => void;
@@ -137,6 +142,7 @@ export const useCallStore = create<CallState>((set, get) => ({
   transcript: [],
   interimTranscript: '',
   aiNotes: null,
+  aiAnalysisInterval: null,
   
   isMuted: false,
   isVideoOff: false,
@@ -540,6 +546,7 @@ export const useCallStore = create<CallState>((set, get) => ({
             console.log('[CALL] Socket connected, starting recognition');
             get().startSpeechRecognition();
             get().startCallRecording();
+            get().startAIAnalysis();
             clearInterval(checkSocketInterval);
           }
         }, 500);
@@ -554,6 +561,10 @@ export const useCallStore = create<CallState>((set, get) => ({
       });
       // Stop speech recognition
       get().stopSpeechRecognition();
+      // Stop AI analysis
+      get().stopAIAnalysis();
+      // Generate final summary
+      await get().analyzeTranscript(true);
       // Stop and upload recording
       await get().stopCallRecording();
     });
@@ -907,6 +918,10 @@ export const useCallStore = create<CallState>((set, get) => ({
     });
 
     // Handle incoming remote tracks - CRITICAL for video display
+    // Store tracks as they arrive and merge into a single stream
+    const remoteTracksMap = new Map<string, MediaStreamTrack>();
+    let mergedRemoteStream: MediaStream | null = null;
+    
     pc.ontrack = (event) => {
       console.log('[WEBRTC] 📹 ontrack event received:', {
         streams: event.streams?.length || 0,
@@ -917,114 +932,129 @@ export const useCallStore = create<CallState>((set, get) => ({
         trackMuted: event.track?.muted,
         trackLabel: event.track?.label,
         receiver: event.receiver?.track?.kind,
+        transceiver: event.transceiver?.mid,
       });
       
-      let remoteStream: MediaStream | null = null;
-      
-      if (event.streams && event.streams.length > 0) {
-        remoteStream = event.streams[0];
-        console.log('[WEBRTC] ✅ Received remote stream from streams array:', {
-          id: remoteStream.id,
-          active: remoteStream.active,
-          videoTracks: remoteStream.getVideoTracks().length,
-          audioTracks: remoteStream.getAudioTracks().length,
-          tracks: remoteStream.getTracks().map(t => ({ 
-            kind: t.kind, 
-            enabled: t.enabled, 
-            id: t.id,
-            readyState: t.readyState,
-            muted: t.muted,
-            label: t.label,
-          })),
-        });
-      } else if (event.track) {
-        // Fallback: create a stream from the track if streams array is empty
-        console.log('[WEBRTC] ⚠️ No streams array, creating stream from track');
-        remoteStream = new MediaStream([event.track]);
-        console.log('[WEBRTC] ✅ Created remote stream from track:', {
-          id: remoteStream.id,
-          active: remoteStream.active,
-          tracks: remoteStream.getTracks().length,
-        });
-      } else {
-        console.warn('[WEBRTC] ⚠️ ontrack event has no streams or tracks');
+      // CRITICAL: Handle track from event
+      if (!event.track) {
+        console.warn('[WEBRTC] ⚠️ ontrack event has no track');
         return;
       }
       
-      if (remoteStream) {
-        // CRITICAL: Verify video track exists and is enabled
-        const videoTracks = remoteStream.getVideoTracks();
-        const audioTracks = remoteStream.getAudioTracks();
-        
-        console.log('[WEBRTC] 📊 Remote stream analysis:', {
-          totalTracks: remoteStream.getTracks().length,
-          videoTracks: videoTracks.length,
-          audioTracks: audioTracks.length,
+      const track = event.track;
+      const trackKey = `${track.kind}-${track.id}`;
+      
+      // Store track
+      remoteTracksMap.set(trackKey, track);
+      console.log('[WEBRTC] 📝 Track stored:', {
+        kind: track.kind,
+        id: track.id,
+        enabled: track.enabled,
+        readyState: track.readyState,
+        totalTracksStored: remoteTracksMap.size,
+      });
+      
+      // Get or create merged stream
+      if (!mergedRemoteStream) {
+        mergedRemoteStream = new MediaStream();
+        console.log('[WEBRTC] 🆕 Created new merged remote stream');
+      }
+      
+      // Add track to merged stream if not already added
+      const existingTrack = mergedRemoteStream.getTracks().find(t => t.id === track.id);
+      if (!existingTrack) {
+        mergedRemoteStream.addTrack(track);
+        console.log('[WEBRTC] ✅ Added track to merged stream:', {
+          kind: track.kind,
+          id: track.id,
+          totalTracksInStream: mergedRemoteStream.getTracks().length,
+        });
+      } else {
+        console.log('[WEBRTC] ℹ️ Track already in merged stream:', track.id);
+      }
+      
+      // CRITICAL: Verify video track exists and is enabled
+      const videoTracks = mergedRemoteStream.getVideoTracks();
+      const audioTracks = mergedRemoteStream.getAudioTracks();
+      
+      console.log('[WEBRTC] 📊 Merged remote stream analysis:', {
+        totalTracks: mergedRemoteStream.getTracks().length,
+        videoTracks: videoTracks.length,
+        audioTracks: audioTracks.length,
+        streamId: mergedRemoteStream.id,
+        streamActive: mergedRemoteStream.active,
+      });
+      
+      if (videoTracks.length > 0) {
+        const videoTrack = videoTracks[0];
+        console.log('[WEBRTC] 🎥 Remote video track verified:', {
+          enabled: videoTrack.enabled,
+          readyState: videoTrack.readyState,
+          muted: videoTrack.muted,
+          label: videoTrack.label,
+          settings: videoTrack.getSettings(),
+          constraints: videoTrack.getConstraints(),
         });
         
-        if (videoTracks.length > 0) {
-          const videoTrack = videoTracks[0];
-          console.log('[WEBRTC] 🎥 Remote video track verified:', {
-            enabled: videoTrack.enabled,
-            readyState: videoTrack.readyState,
-            muted: videoTrack.muted,
-            label: videoTrack.label,
-            settings: videoTrack.getSettings(),
-            constraints: videoTrack.getConstraints(),
-          });
-          
-          // CRITICAL: Ensure track is enabled
-          if (!videoTrack.enabled) {
-            console.warn('[WEBRTC] ⚠️ Remote video track is disabled, attempting to enable...');
-            videoTrack.enabled = true;
-          }
-          
-          // Monitor track state changes
-          videoTrack.onended = () => {
-            console.log('[WEBRTC] ⚠️ Remote video track ended');
-            // Update store to reflect track ended
-            set((state) => ({ remoteStream: state.remoteStream }));
-          };
-          
-          videoTrack.onmute = () => {
-            console.log('[WEBRTC] ⚠️ Remote video track muted');
-          };
-          
-          videoTrack.onunmute = () => {
-            console.log('[WEBRTC] ✅ Remote video track unmuted');
-            // Force update to trigger re-render
-            set((state) => ({ remoteStream: state.remoteStream }));
-          };
-          
-          // Monitor track state changes
-          videoTrack.addEventListener('ended', () => {
-            console.log('[WEBRTC] ⚠️ Remote video track ended (event listener)');
-          });
-          
-          videoTrack.addEventListener('mute', () => {
-            console.log('[WEBRTC] ⚠️ Remote video track muted (event listener)');
-          });
-          
-          videoTrack.addEventListener('unmute', () => {
-            console.log('[WEBRTC] ✅ Remote video track unmuted (event listener)');
-            set((state) => ({ remoteStream: state.remoteStream }));
-          });
-        } else {
-          console.warn('[WEBRTC] ⚠️ Remote stream has no video tracks - audio only or video disabled');
+        // CRITICAL: Ensure track is enabled
+        if (!videoTrack.enabled) {
+          console.warn('[WEBRTC] ⚠️ Remote video track is disabled, enabling...');
+          videoTrack.enabled = true;
+          console.log('[WEBRTC] ✅ Video track enabled');
         }
         
-        // CRITICAL: Set remote stream - this triggers VideoParticipant to display it
-        set({ remoteStream: remoteStream });
-        console.log('[WEBRTC] ✅ Remote stream set in store, should trigger video display');
+        // Monitor track state changes
+        const handleTrackEnded = () => {
+          console.log('[WEBRTC] ⚠️ Remote video track ended');
+          set((state) => ({ remoteStream: state.remoteStream }));
+        };
         
-        // Force a small delay to ensure React has time to update
-        setTimeout(() => {
-          const { remoteStream: currentStream } = get();
-          if (currentStream && remoteStream && currentStream.id === remoteStream.id) {
-            console.log('[WEBRTC] ✅ Remote stream confirmed in store after delay');
-          }
-        }, 100);
+        const handleTrackMute = () => {
+          console.log('[WEBRTC] ⚠️ Remote video track muted');
+        };
+        
+        const handleTrackUnmute = () => {
+          console.log('[WEBRTC] ✅ Remote video track unmuted');
+          set((state) => ({ remoteStream: state.remoteStream }));
+        };
+        
+        // Remove old listeners if they exist
+        videoTrack.removeEventListener('ended', handleTrackEnded);
+        videoTrack.removeEventListener('mute', handleTrackMute);
+        videoTrack.removeEventListener('unmute', handleTrackUnmute);
+        
+        // Add new listeners
+        videoTrack.addEventListener('ended', handleTrackEnded);
+        videoTrack.addEventListener('mute', handleTrackMute);
+        videoTrack.addEventListener('unmute', handleTrackUnmute);
+      } else {
+        console.warn('[WEBRTC] ⚠️ Merged stream has no video tracks yet - waiting for video track...');
       }
+      
+      // CRITICAL: Set remote stream in store - this triggers VideoParticipant to display it
+      set({ remoteStream: mergedRemoteStream });
+      console.log('[WEBRTC] ✅ Remote stream set in store:', {
+        streamId: mergedRemoteStream.id,
+        videoTracks: videoTracks.length,
+        audioTracks: audioTracks.length,
+        shouldTriggerVideoDisplay: videoTracks.length > 0,
+      });
+      
+      // Force update after a short delay to ensure React re-renders
+      setTimeout(() => {
+        const { remoteStream: currentStream } = get();
+        if (currentStream && mergedRemoteStream && currentStream.id === mergedRemoteStream.id) {
+          const currentVideoTracks = currentStream.getVideoTracks();
+          console.log('[WEBRTC] ✅ Remote stream confirmed in store after delay:', {
+            streamId: currentStream.id,
+            videoTracks: currentVideoTracks.length,
+            videoTrackEnabled: currentVideoTracks[0]?.enabled,
+            videoTrackReadyState: currentVideoTracks[0]?.readyState,
+          });
+        } else {
+          console.warn('[WEBRTC] ⚠️ Stream mismatch or not set in store');
+        }
+      }, 100);
     };
 
       pc.onicecandidate = (event) => {
@@ -1055,8 +1085,15 @@ export const useCallStore = create<CallState>((set, get) => ({
       };
 
       pc.onconnectionstatechange = () => {
-        console.log('[WEBRTC] Connection state:', pc.connectionState);
+        console.log('[WEBRTC] 🔄 Connection state changed:', {
+          connectionState: pc.connectionState,
+          iceConnectionState: pc.iceConnectionState,
+          iceGatheringState: pc.iceGatheringState,
+          signalingState: pc.signalingState,
+        });
+        
         if (pc.connectionState === 'connected') {
+          console.log('[WEBRTC] ✅ Peer connection CONNECTED - video should be working now');
           const { callStartTime } = get();
           // Only set start time if not already set (preserve existing start time)
           const startTime = callStartTime || Date.now();
@@ -1210,6 +1247,10 @@ export const useCallStore = create<CallState>((set, get) => ({
     
     // Stop speech recognition
     get().stopSpeechRecognition();
+    // Stop AI analysis
+    get().stopAIAnalysis();
+    // Generate final summary
+    await get().analyzeTranscript(true);
     // Stop and upload recording
     await get().stopCallRecording();
     
@@ -1345,6 +1386,121 @@ export const useCallStore = create<CallState>((set, get) => ({
     
     if (socket) {
       socket.emit('notes:request');
+    }
+  },
+
+  startAIAnalysis: () => {
+    const { aiAnalysisInterval, callStatus } = get();
+    
+    // Don't start if already running or call not active
+    if (aiAnalysisInterval || callStatus !== 'active') {
+      return;
+    }
+
+    console.log('[AI] Starting real-time AI analysis (every 30 seconds)');
+    
+    // Start immediate analysis
+    get().analyzeTranscript(false);
+    
+    // Set up interval for periodic analysis
+    const interval = setInterval(() => {
+      const { callStatus: currentStatus } = get();
+      if (currentStatus === 'active') {
+        get().analyzeTranscript(false);
+      } else {
+        // Stop if call ended
+        get().stopAIAnalysis();
+      }
+    }, 30000); // Every 30 seconds
+
+    set({ aiAnalysisInterval: interval });
+  },
+
+  stopAIAnalysis: () => {
+    const { aiAnalysisInterval } = get();
+    
+    if (aiAnalysisInterval) {
+      clearInterval(aiAnalysisInterval);
+      set({ aiAnalysisInterval: null });
+      console.log('[AI] Stopped real-time AI analysis');
+    }
+  },
+
+  analyzeTranscript: async (isFinal: boolean = false) => {
+    const { transcript, callId, participants, callStartTime } = get();
+    const { accessToken } = useAuthStore.getState();
+    
+    if (!callId || !accessToken) {
+      console.warn('[AI] Cannot analyze: missing callId or accessToken');
+      return;
+    }
+
+    if (transcript.length === 0) {
+      console.log('[AI] No transcript to analyze yet');
+      return;
+    }
+
+    try {
+      // Convert transcript segments to text
+      const transcriptText = transcript
+        .map(seg => `${seg.speaker}: ${seg.text}`)
+        .join('\n');
+
+      // Calculate duration
+      const duration = callStartTime ? Date.now() - callStartTime : 0;
+
+      // Get participant names
+      const participantNames = participants.map(p => p.userName);
+      const authUser = useAuthStore.getState().user;
+      if (authUser?.name && !participantNames.includes(authUser.name)) {
+        participantNames.push(authUser.name);
+      }
+
+      console.log('[AI] Analyzing transcript...', {
+        transcriptLength: transcriptText.length,
+        segmentCount: transcript.length,
+        isFinal,
+      });
+
+      const response = await fetch(`${API_URL}/api/calls/${callId}/analyze-transcript`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          transcript: transcriptText,
+          participants: participantNames,
+          duration,
+          isFinal,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('[AI] Analysis failed:', errorData);
+        return;
+      }
+
+      const analysis = await response.json();
+      
+      // Update AI notes in store
+      set({
+        aiNotes: {
+          summary: analysis.summary || '',
+          bullets: analysis.keyPoints || [],
+          actionItems: analysis.actionItems || [],
+          decisions: analysis.decisions || [],
+          suggestedReplies: analysis.nextSteps || [],
+          keyTopics: analysis.topics || [],
+          isFinal,
+          lastUpdated: Date.now(),
+        },
+      });
+
+      console.log('[AI] ✅ Analysis complete', { isFinal });
+    } catch (error: any) {
+      console.error('[AI] Error analyzing transcript:', error);
     }
   },
 
@@ -1834,6 +1990,7 @@ export const useCallStore = create<CallState>((set, get) => ({
       transcript: [],
       interimTranscript: '',
       aiNotes: null,
+      aiAnalysisInterval: null,
       isMuted: false,
       isVideoOff: false,
       isRecording: false,

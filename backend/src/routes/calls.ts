@@ -266,11 +266,16 @@ router.post(
       let existingNotes = null;
       const existingNotesDoc = await Notes.findOne({ callId: id });
       if (existingNotesDoc) {
+        // Convert IDecision[] to string[] for NotesResult compatibility
+        const decisionsArray = existingNotesDoc.decisions ? existingNotesDoc.decisions.map((d: any) => 
+          typeof d === 'string' ? d : d.decision
+        ) : [];
+        
         existingNotes = {
           summary: existingNotesDoc.summary,
           bullets: existingNotesDoc.bullets,
           actionItems: existingNotesDoc.actionItems,
-          decisions: existingNotesDoc.decisions,
+          decisions: decisionsArray,
           suggestedReplies: existingNotesDoc.suggestedReplies,
           keyTopics: existingNotesDoc.keyTopics,
         };

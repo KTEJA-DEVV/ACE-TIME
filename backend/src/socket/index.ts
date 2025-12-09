@@ -696,7 +696,16 @@ async function attachCallToConversation(callSession: any) {
       
       // Add decisions if available
       if (notes.decisions && notes.decisions.length > 0) {
-        summaryContent += `\n\n🎯 Decisions Made:\n${notes.decisions.map((decision: string) => `• ${decision}`).join('\n')}`;
+        // Handle both string[] (legacy) and IDecision[] (new format)
+        const decisionsText = notes.decisions.map((decision: any) => {
+          if (typeof decision === 'string') {
+            return `• ${decision}`;
+          } else {
+            // IDecision object
+            return `• ${decision.decision}${decision.context ? ` (${decision.context})` : ''}`;
+          }
+        }).join('\n');
+        summaryContent += `\n\n🎯 Decisions Made:\n${decisionsText}`;
       }
       
       const notesMessage = new Message({
@@ -775,7 +784,10 @@ async function updateNotes(room: RoomState, roomId: string, io: Server, isFinal:
         summary: existingNotes.summary,
         bullets: existingNotes.bullets,
         actionItems: existingNotes.actionItems,
-        decisions: existingNotes.decisions,
+        // Convert IDecision[] to string[] for NotesResult compatibility
+        decisions: existingNotes.decisions ? existingNotes.decisions.map((d: any) => 
+          typeof d === 'string' ? d : d.decision
+        ) : [],
       } : undefined
     );
 

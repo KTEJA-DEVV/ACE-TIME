@@ -96,7 +96,7 @@ export default function CallRoom() {
   // Calculate call duration from start time (persists across navigation)
   const [callDuration, setCallDuration] = useState(0);
   const [copied, setCopied] = useState(false);
-  const [activeRightTab, setActiveRightTab] = useState<RightTab>('transcript');
+  const [activeRightTab, setActiveRightTab] = useState<RightTab>('dreamweaving');
   const [showAINotesSidebar, setShowAINotesSidebar] = useState(false);
   
   // Mobile responsive state
@@ -2761,6 +2761,24 @@ export default function CallRoom() {
             onClick={handleVideoTap}
             style={{ paddingTop: '48px', paddingBottom: '80px' }} // Space for tabs and controls
           >
+            {/* Call Controls - Positioned inside video area (Mobile) */}
+            {roomId && 
+             (callStatus === 'active' || callStatus === 'waiting') &&
+             activeRightTab === 'dreamweaving' && (
+              <div className="absolute bottom-6 sm:bottom-8 left-1/2 transform -translate-x-1/2 z-50 pointer-events-auto">
+                <CallControls
+                  isMuted={isMuted}
+                  isVideoOff={isVideoOff}
+                  onToggleMute={toggleMute}
+                  onToggleVideo={toggleVideo}
+                  onEndCall={handleEndCall}
+                  onScreenShare={handleScreenShare}
+                  onAddParticipant={handleAddParticipant}
+                  onSettings={handleSettings}
+                  isScreenSharing={isScreenSharing}
+                />
+              </div>
+            )}
             {/* Always show local video, even when alone */}
             {(() => {
               // Include AI as a participant (always present)
@@ -2826,7 +2844,7 @@ export default function CallRoom() {
                         userId={participant.userId}
                         isVideoOff={participantData?.isVideoOff || false}
                         isMuted={participantData?.isMuted || false}
-                        className="min-h-[160px] sm:min-h-0"
+                        className="min-h-[180px] sm:min-h-0"
                       />
                     );
                   })}
@@ -2862,6 +2880,25 @@ export default function CallRoom() {
                 </div>
               );
             })()}
+
+            {/* Call Controls - Positioned inside video area (Mobile) - After video grid so it appears on top */}
+            {roomId && 
+             (callStatus === 'active' || callStatus === 'waiting') &&
+             activeRightTab === 'dreamweaving' && (
+              <div className="absolute bottom-6 sm:bottom-8 left-1/2 transform -translate-x-1/2 z-50 pointer-events-auto">
+                <CallControls
+                  isMuted={isMuted}
+                  isVideoOff={isVideoOff}
+                  onToggleMute={toggleMute}
+                  onToggleVideo={toggleVideo}
+                  onEndCall={handleEndCall}
+                  onScreenShare={handleScreenShare}
+                  onAddParticipant={handleAddParticipant}
+                  onSettings={handleSettings}
+                  isScreenSharing={isScreenSharing}
+                />
+              </div>
+            )}
 
             {/* Mobile Bottom Tab Navigation */}
             <div className="mobile-bottom-nav safe-area-bottom">
@@ -3244,7 +3281,7 @@ export default function CallRoom() {
                         userId={participant.userId}
                         isVideoOff={participantData?.isVideoOff || false}
                         isMuted={participantData?.isMuted || false}
-                        className="min-h-[160px] sm:min-h-0"
+                        className="min-h-[180px] sm:min-h-0"
                       />
                     );
                   })}
@@ -3280,6 +3317,25 @@ export default function CallRoom() {
                 </div>
               );
             })()}
+
+            {/* Call Controls - Positioned inside video area (Desktop) - After video grid so it appears on top */}
+            {roomId && 
+             (callStatus === 'active' || callStatus === 'waiting') &&
+             activeRightTab === 'dreamweaving' && (
+              <div className="absolute bottom-6 sm:bottom-8 left-1/2 transform -translate-x-1/2 z-50 pointer-events-auto">
+                <CallControls
+                  isMuted={isMuted}
+                  isVideoOff={isVideoOff}
+                  onToggleMute={toggleMute}
+                  onToggleVideo={toggleVideo}
+                  onEndCall={handleEndCall}
+                  onScreenShare={handleScreenShare}
+                  onAddParticipant={handleAddParticipant}
+                  onSettings={handleSettings}
+                  isScreenSharing={isScreenSharing}
+                />
+              </div>
+            )}
 
           </div>
         </div>
@@ -3560,40 +3616,6 @@ export default function CallRoom() {
         callTitle={`Call ${roomId ? `- ${roomId.substring(0, 8)}` : ''}`}
       />
 
-      {/* Global Call Controls - Fixed at bottom, visible on ALL tabs during active calls - OUTSIDE all overflow containers */}
-      {/* Show controls when:
-          1. We have a roomId (in a call room)
-          2. Call status is 'active' or 'waiting' (call is in progress)
-          3. Controls appear on ALL tabs (Dream, Chat, Transcript, Notes) when call is active
-      */}
-      {roomId && 
-       (callStatus === 'active' || callStatus === 'waiting') && (
-        <div 
-          className="fixed left-1/2 transform -translate-x-1/2 z-[9999] bottom-8" 
-          style={{ 
-            pointerEvents: 'auto', 
-            display: 'flex', 
-            visibility: 'visible', 
-            opacity: 1,
-            position: 'fixed',
-            zIndex: 9999,
-            width: 'auto',
-            height: 'auto'
-          }}
-        >
-          <CallControls
-            isMuted={isMuted}
-            isVideoOff={isVideoOff}
-            onToggleMute={toggleMute}
-            onToggleVideo={toggleVideo}
-            onEndCall={handleEndCall}
-            onScreenShare={handleScreenShare}
-            onAddParticipant={handleAddParticipant}
-            onSettings={handleSettings}
-            isScreenSharing={isScreenSharing}
-          />
-        </div>
-      )}
 
     </div>
   );

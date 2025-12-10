@@ -71,41 +71,26 @@ export default function CallControls({
 
   return (
     <>
-      {/* Call Controls Container with backdrop blur - Fixed z-index and no text overlap */}
+      {/* Call Controls Container - Positioned relative to parent, not viewport */}
       <div
-        className={`flex items-center justify-center gap-4 sm:gap-5 md:gap-6 backdrop-blur-xl bg-dark-900/70 rounded-full px-4 sm:px-6 py-3 sm:py-4 border border-white/10 shadow-2xl ${className}`}
+        className={`flex items-center justify-center gap-3 sm:gap-4 md:gap-5 lg:gap-6 backdrop-blur-lg bg-dark-900/80 rounded-full px-4 sm:px-5 md:px-6 py-3 sm:py-3 md:py-4 border border-white/10 shadow-2xl ${className}`}
         style={{ 
-          isolation: 'isolate', 
-          position: 'fixed',
-          bottom: 'calc(env(safe-area-inset-bottom) + 1.5rem)',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          display: 'flex',
-          visibility: 'visible',
-          opacity: 1,
-          zIndex: 9999,
-          width: 'auto',
-          height: 'auto',
-          paddingBottom: 'calc(env(safe-area-inset-bottom) + 0.75rem)',
+          isolation: 'isolate',
+          paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 0.5rem)',
         }}
       >
-        {/* Mute/Unmute Button - Fixed size 56px */}
+        {/* Mute/Unmute Button - Responsive size: 64px mobile, 56px tablet, 64px desktop */}
         <button
           onClick={onToggleMute}
-          className={`
-            relative rounded-full flex items-center justify-center 
-            transition-all duration-300 ease-out
-            hover:scale-110 active:scale-95 
-            shadow-2xl border-2
-            ${
-              isMuted
-                ? 'bg-red-500/95 hover:bg-red-600 border-red-400/60 shadow-red-500/60'
-                : 'bg-dark-800/95 hover:bg-dark-700/95 border-white/30 shadow-dark-900/60'
-            }
-            group overflow-hidden
-          `}
-          style={{ width: 'clamp(48px, 14vw, 56px)', height: 'clamp(48px, 14vw, 56px)', minWidth: '48px', minHeight: '48px' }}
+          className={`w-16 h-16 sm:w-14 sm:h-14 md:w-16 md:h-16 relative rounded-full flex items-center justify-center transition-all duration-300 ease-out hover:scale-110 active:scale-95 shadow-2xl border-2 ${
+            isMuted
+              ? 'bg-red-500/95 hover:bg-red-600 border-red-400/60 shadow-red-500/60'
+              : 'bg-dark-800/95 hover:bg-dark-700/95 border-white/30 shadow-dark-900/60'
+          } group overflow-hidden`}
+          style={{ minWidth: '64px', minHeight: '64px' }}
           title={isMuted ? 'Unmute' : 'Mute'}
+          aria-label={isMuted ? 'Unmute microphone' : 'Mute microphone'}
+          aria-pressed={isMuted}
         >
           {/* Animated background gradient when muted */}
           {isMuted && (
@@ -118,20 +103,20 @@ export default function CallControls({
           {/* Glass morphism overlay */}
           <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-full z-0" />
           
-          {/* Icon with smooth transition and rotation - Properly centered */}
+          {/* Icon with smooth transition and rotation - Properly centered, responsive size */}
           <div className={`relative z-20 flex items-center justify-center transition-all duration-300 ${
             isMuted 
               ? 'group-hover:scale-110 group-hover:rotate-12' 
               : 'group-hover:scale-110'
-          }`} style={{ width: '24px', height: '24px' }}>
+          }`} style={{ width: '28px', height: '28px' }}>
             {isMuted ? (
               <FiMicOff 
-                size={24} 
+                size={28} 
                 className="text-white" 
                 style={{ 
                   display: 'inline-block', 
-                  width: '24px', 
-                  height: '24px', 
+                  width: '28px', 
+                  height: '28px', 
                   color: '#ffffff', 
                   opacity: 1,
                   visibility: 'visible'
@@ -139,12 +124,12 @@ export default function CallControls({
               />
             ) : (
               <FiMic 
-                size={24} 
+                size={28} 
                 className="text-white" 
                 style={{ 
                   display: 'inline-block', 
-                  width: '24px', 
-                  height: '24px', 
+                  width: '28px', 
+                  height: '28px', 
                   color: '#ffffff', 
                   opacity: 1,
                   visibility: 'visible'
@@ -160,23 +145,18 @@ export default function CallControls({
           <div className="absolute inset-0 rounded-full bg-white/10 scale-0 group-hover:scale-100 transition-transform duration-300 opacity-0 group-hover:opacity-100" />
         </button>
 
-        {/* Video On/Off Button - Fixed size 56px */}
+        {/* Video On/Off Button - Responsive size: 64px mobile, 56px tablet, 64px desktop */}
         <button
           onClick={onToggleVideo}
-          className={`
-            relative rounded-full flex items-center justify-center 
-            transition-all duration-300 ease-out
-            hover:scale-110 active:scale-95 
-            shadow-2xl border-2
-            ${
-              isVideoOff
-                ? 'bg-red-500/95 hover:bg-red-600 border-red-400/60 shadow-red-500/60'
-                : 'bg-dark-800/95 hover:bg-dark-700/95 border-white/30 shadow-dark-900/60'
-            }
-            group overflow-hidden
-          `}
-          style={{ width: 'clamp(48px, 14vw, 56px)', height: 'clamp(48px, 14vw, 56px)', minWidth: '48px', minHeight: '48px' }}
+          className={`w-16 h-16 sm:w-14 sm:h-14 md:w-16 md:h-16 relative rounded-full flex items-center justify-center transition-all duration-300 ease-out hover:scale-110 active:scale-95 shadow-2xl border-2 ${
+            isVideoOff
+              ? 'bg-red-500/95 hover:bg-red-600 border-red-400/60 shadow-red-500/60'
+              : 'bg-dark-800/95 hover:bg-dark-700/95 border-white/30 shadow-dark-900/60'
+          } group overflow-hidden`}
+          style={{ minWidth: '64px', minHeight: '64px' }}
           title={isVideoOff ? 'Turn on video' : 'Turn off video'}
+          aria-label={isVideoOff ? 'Turn on camera' : 'Turn off camera'}
+          aria-pressed={isVideoOff}
         >
           {/* Animated background when video is off */}
           {isVideoOff && (
@@ -189,20 +169,20 @@ export default function CallControls({
           {/* Glass morphism overlay */}
           <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-full z-0" />
           
-          {/* Icon with smooth transition - Properly centered */}
+          {/* Icon with smooth transition - Properly centered, responsive size */}
           <div className={`relative z-20 flex items-center justify-center transition-all duration-300 ${
             isVideoOff 
               ? 'group-hover:scale-110 group-hover:rotate-12' 
               : 'group-hover:scale-110'
-          }`} style={{ width: '24px', height: '24px' }}>
+          }`} style={{ width: '28px', height: '28px' }}>
             {isVideoOff ? (
               <FiVideoOff 
-                size={24} 
+                size={28} 
                 className="text-white" 
                 style={{ 
                   display: 'inline-block', 
-                  width: '24px', 
-                  height: '24px', 
+                  width: '28px', 
+                  height: '28px', 
                   color: '#ffffff', 
                   opacity: 1,
                   visibility: 'visible'
@@ -210,12 +190,12 @@ export default function CallControls({
               />
             ) : (
               <FiVideo 
-                size={24} 
+                size={28} 
                 className="text-white" 
                 style={{ 
                   display: 'inline-block', 
-                  width: '24px', 
-                  height: '24px', 
+                  width: '28px', 
+                  height: '28px', 
                   color: '#ffffff', 
                   opacity: 1,
                   visibility: 'visible'
@@ -231,7 +211,7 @@ export default function CallControls({
           <div className="absolute inset-0 rounded-full bg-white/10 scale-0 group-hover:scale-100 transition-transform duration-300 opacity-0 group-hover:opacity-100" />
         </button>
 
-        {/* Screen Share Button - Fixed size 56px */}
+        {/* Screen Share Button - Responsive size: 64px mobile, 56px tablet, 64px desktop */}
         {onScreenShare && (
           <button
             onClick={onScreenShare}
@@ -240,6 +220,7 @@ export default function CallControls({
               transition-all duration-300 ease-out
               hover:scale-110 active:scale-95 
               shadow-2xl border-2
+              w-16 h-16 sm:w-14 sm:h-14 md:w-16 md:h-16
               ${
                 isScreenSharing
                   ? 'bg-primary-500/95 hover:bg-primary-600 border-primary-400/60 shadow-primary-500/60'
@@ -247,7 +228,7 @@ export default function CallControls({
               }
               group overflow-hidden
             `}
-            style={{ width: 'clamp(48px, 14vw, 56px)', height: 'clamp(48px, 14vw, 56px)', minWidth: '48px', minHeight: '48px' }}
+            style={{ minWidth: '64px', minHeight: '64px' }}
             title={isScreenSharing ? 'Stop sharing' : 'Share screen'}
           >
             {/* Active state glow */}
@@ -258,15 +239,15 @@ export default function CallControls({
             {/* Glass morphism overlay */}
             <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-full z-0" />
             
-            <div className="relative z-20 flex items-center justify-center transition-all duration-300 group-hover:scale-110 group-hover:rotate-6" style={{ width: '24px', height: '24px' }}>
+            <div className="relative z-20 flex items-center justify-center transition-all duration-300 group-hover:scale-110 group-hover:rotate-6" style={{ width: '28px', height: '28px' }}>
               {isScreenSharing ? (
                 <MdDesktopMac 
-                  size={24} 
+                  size={28} 
                   className="text-white" 
                   style={{ 
                     display: 'inline-block', 
-                    width: '24px', 
-                    height: '24px', 
+                    width: '28px', 
+                    height: '28px', 
                     color: '#ffffff', 
                     opacity: 1,
                     visibility: 'visible'
@@ -274,12 +255,12 @@ export default function CallControls({
                 />
               ) : (
                 <FiMonitor 
-                  size={24} 
+                  size={28} 
                   className="text-white" 
                   style={{ 
                     display: 'inline-block', 
-                    width: '24px', 
-                    height: '24px', 
+                    width: '28px', 
+                    height: '28px', 
                     color: '#ffffff', 
                     opacity: 1,
                     visibility: 'visible'
@@ -292,7 +273,7 @@ export default function CallControls({
           </button>
         )}
 
-        {/* More Menu Button */}
+        {/* More Menu Button - Responsive size: 64px mobile, 56px tablet, 64px desktop */}
         {(onAddParticipant || onSettings) && (
           <div className="relative" ref={menuRef}>
             <button
@@ -302,6 +283,7 @@ export default function CallControls({
                 transition-all duration-300 ease-out
                 hover:scale-110 active:scale-95 
                 shadow-2xl border-2
+                w-16 h-16 sm:w-14 sm:h-14 md:w-16 md:h-16
                 ${
                   showMoreMenu
                     ? 'bg-primary-500/95 hover:bg-primary-600 border-primary-400/60 shadow-primary-500/60'
@@ -309,7 +291,7 @@ export default function CallControls({
                 }
                 group overflow-hidden
               `}
-              style={{ width: 'clamp(48px, 14vw, 56px)', height: 'clamp(48px, 14vw, 56px)', minWidth: '48px', minHeight: '48px' }}
+              style={{ minWidth: '64px', minHeight: '64px' }}
               title="More options"
             >
               {/* Active state glow */}
@@ -324,15 +306,15 @@ export default function CallControls({
                 showMoreMenu 
                   ? 'rotate-180' 
                   : 'group-hover:rotate-90'
-              }`} style={{ width: '24px', height: '24px' }}>
+              }`} style={{ width: '28px', height: '28px' }}>
                 {showMoreMenu ? (
                   <FiX 
-                    size={24} 
+                    size={28} 
                     className="text-white" 
                     style={{ 
                       display: 'inline-block', 
-                      width: '24px', 
-                      height: '24px', 
+                      width: '28px', 
+                      height: '28px', 
                       color: '#ffffff', 
                       opacity: 1,
                       visibility: 'visible'
@@ -340,12 +322,12 @@ export default function CallControls({
                   />
                 ) : (
                   <FiMoreVertical 
-                    size={24} 
+                    size={28} 
                     className="text-white" 
                     style={{ 
                       display: 'inline-block', 
-                      width: '24px', 
-                      height: '24px', 
+                      width: '28px', 
+                      height: '28px', 
                       color: '#ffffff', 
                       opacity: 1,
                       visibility: 'visible'
@@ -415,19 +397,13 @@ export default function CallControls({
           </div>
         )}
 
-        {/* End Call Button - Fixed size 56px (same as others for consistency) */}
+        {/* End Call Button - Responsive size: 80px mobile, 72px tablet, 80px desktop */}
         <button
           onClick={handleEndCall}
-          className={`
-            relative rounded-full flex items-center justify-center 
-            transition-all duration-300 ease-out
-            hover:scale-110 active:scale-95 
-            shadow-2xl border-2
-            bg-red-500/95 hover:bg-red-600 border-red-400/60 shadow-red-500/60
-            group overflow-hidden
-          `}
-          style={{ width: 'clamp(48px, 14vw, 56px)', height: 'clamp(48px, 14vw, 56px)', minWidth: '48px', minHeight: '48px' }}
+          className="w-20 h-20 sm:w-18 sm:h-18 md:w-20 md:h-20 relative rounded-full flex items-center justify-center transition-all duration-300 ease-out hover:scale-110 active:scale-95 shadow-2xl border-2 bg-red-500/95 hover:bg-red-600 border-red-400/60 shadow-red-500/60 group overflow-hidden"
+          style={{ minWidth: '80px', minHeight: '80px' }}
           title="End call"
+          aria-label="End call"
         >
           {/* Pulsing red glow with multiple layers */}
           <div className="absolute inset-0 bg-gradient-to-br from-red-500 to-red-600 opacity-90 animate-pulse" />
@@ -437,14 +413,14 @@ export default function CallControls({
           {/* Glass morphism overlay */}
           <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-full z-0" />
           
-          <div className="relative z-20 flex items-center justify-center transition-all duration-300 group-hover:rotate-90 group-hover:scale-110" style={{ width: '24px', height: '24px' }}>
+          <div className="relative z-20 flex items-center justify-center transition-all duration-300 group-hover:rotate-90 group-hover:scale-110" style={{ width: '32px', height: '32px' }}>
             <MdCallEnd 
-              size={24} 
+              size={32} 
               className="text-white" 
               style={{ 
                 display: 'inline-block', 
-                width: '24px', 
-                height: '24px', 
+                width: '32px', 
+                height: '32px', 
                 color: '#ffffff', 
                 opacity: 1,
                 visibility: 'visible'

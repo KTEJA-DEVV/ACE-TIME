@@ -286,7 +286,7 @@ export default function VideoParticipant({
   const showPlaceholder = isVideoOff || !stream || !hasVideoTrack || !isVideoPlaying;
 
   return (
-    <div className={`relative bg-dark-900 rounded-xl overflow-hidden ${className}`} style={{ aspectRatio: '16/9' }}>
+    <div className={`relative bg-dark-900 rounded-xl overflow-hidden min-h-[180px] sm:min-h-0 ${className}`} style={{ aspectRatio: '16/9' }}>
       {/* Speaking Border - Green glow when speaking */}
       <SpeakingBorder isSpeaking={isSpeaking && !isMuted} />
 

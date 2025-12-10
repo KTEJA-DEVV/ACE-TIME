@@ -1,17 +1,16 @@
 import { useState, useRef, useEffect } from 'react';
 import { 
-  FiMic, 
-  FiMicOff, 
-  FiVideo, 
-  FiVideoOff, 
-  FiMonitor,
-  FiUserPlus, 
-  FiSettings, 
-  FiMoreVertical,
-  FiAlertTriangle, 
-  FiX 
-} from 'react-icons/fi';
-import { MdCallEnd, MdDesktopMac } from 'react-icons/md';
+  Mic, 
+  MicOff, 
+  Video, 
+  VideoOff, 
+  Monitor,
+  UserPlus, 
+  Settings, 
+  AlertTriangle, 
+  X,
+  PhoneOff
+} from 'lucide-react';
 
 interface CallControlsProps {
   isMuted: boolean;
@@ -79,15 +78,15 @@ export default function CallControls({
           paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 0.5rem)',
         }}
       >
-        {/* Mute/Unmute Button - Responsive size: 64px mobile, 56px tablet, 64px desktop */}
+        {/* Mute/Unmute Button - Fixed 56px size */}
         <button
           onClick={onToggleMute}
-          className={`w-16 h-16 sm:w-14 sm:h-14 md:w-16 md:h-16 relative rounded-full flex items-center justify-center transition-all duration-300 ease-out hover:scale-110 active:scale-95 shadow-2xl border-2 ${
+          className={`w-14 h-14 relative rounded-full flex items-center justify-center transition-all duration-300 ease-out hover:scale-110 active:scale-95 shadow-2xl border-2 ${
             isMuted
               ? 'bg-red-500/95 hover:bg-red-600 border-red-400/60 shadow-red-500/60'
               : 'bg-dark-800/95 hover:bg-dark-700/95 border-white/30 shadow-dark-900/60'
           } group overflow-hidden`}
-          style={{ minWidth: '64px', minHeight: '64px' }}
+          style={{ width: '56px', height: '56px', minWidth: '56px', minHeight: '56px' }}
           title={isMuted ? 'Unmute' : 'Mute'}
           aria-label={isMuted ? 'Unmute microphone' : 'Mute microphone'}
           aria-pressed={isMuted}
@@ -103,37 +102,43 @@ export default function CallControls({
           {/* Glass morphism overlay */}
           <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-full z-0" />
           
-          {/* Icon with smooth transition and rotation - Properly centered, responsive size */}
+          {/* Icon with smooth transition and rotation - Properly centered, 24px size */}
           <div className={`relative z-20 flex items-center justify-center transition-all duration-300 ${
             isMuted 
               ? 'group-hover:scale-110 group-hover:rotate-12' 
               : 'group-hover:scale-110'
-          }`} style={{ width: '28px', height: '28px' }}>
+          }`}>
             {isMuted ? (
-              <FiMicOff 
-                size={28} 
+              <MicOff 
+                size={24}
                 className="text-white" 
+                strokeWidth={2.5}
                 style={{ 
-                  display: 'inline-block', 
-                  width: '28px', 
-                  height: '28px', 
-                  color: '#ffffff', 
+                  display: 'block',
+                  width: '24px',
+                  height: '24px',
+                  color: '#ffffff',
+                  stroke: '#ffffff',
+                  fill: 'none',
                   opacity: 1,
                   visibility: 'visible'
-                }} 
+                }}
               />
             ) : (
-              <FiMic 
-                size={28} 
+              <Mic 
+                size={24}
                 className="text-white" 
+                strokeWidth={2.5}
                 style={{ 
-                  display: 'inline-block', 
-                  width: '28px', 
-                  height: '28px', 
-                  color: '#ffffff', 
+                  display: 'block',
+                  width: '24px',
+                  height: '24px',
+                  color: '#ffffff',
+                  stroke: '#ffffff',
+                  fill: 'none',
                   opacity: 1,
                   visibility: 'visible'
-                }} 
+                }}
               />
             )}
           </div>
@@ -145,15 +150,15 @@ export default function CallControls({
           <div className="absolute inset-0 rounded-full bg-white/10 scale-0 group-hover:scale-100 transition-transform duration-300 opacity-0 group-hover:opacity-100" />
         </button>
 
-        {/* Video On/Off Button - Responsive size: 64px mobile, 56px tablet, 64px desktop */}
+        {/* Video On/Off Button - Fixed 56px size */}
         <button
           onClick={onToggleVideo}
-          className={`w-16 h-16 sm:w-14 sm:h-14 md:w-16 md:h-16 relative rounded-full flex items-center justify-center transition-all duration-300 ease-out hover:scale-110 active:scale-95 shadow-2xl border-2 ${
+          className={`w-14 h-14 relative rounded-full flex items-center justify-center transition-all duration-300 ease-out hover:scale-110 active:scale-95 shadow-2xl border-2 ${
             isVideoOff
               ? 'bg-red-500/95 hover:bg-red-600 border-red-400/60 shadow-red-500/60'
               : 'bg-dark-800/95 hover:bg-dark-700/95 border-white/30 shadow-dark-900/60'
           } group overflow-hidden`}
-          style={{ minWidth: '64px', minHeight: '64px' }}
+          style={{ width: '56px', height: '56px', minWidth: '56px', minHeight: '56px' }}
           title={isVideoOff ? 'Turn on video' : 'Turn off video'}
           aria-label={isVideoOff ? 'Turn on camera' : 'Turn off camera'}
           aria-pressed={isVideoOff}
@@ -169,37 +174,43 @@ export default function CallControls({
           {/* Glass morphism overlay */}
           <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-full z-0" />
           
-          {/* Icon with smooth transition - Properly centered, responsive size */}
+          {/* Icon with smooth transition - Properly centered, 24px size */}
           <div className={`relative z-20 flex items-center justify-center transition-all duration-300 ${
             isVideoOff 
               ? 'group-hover:scale-110 group-hover:rotate-12' 
               : 'group-hover:scale-110'
-          }`} style={{ width: '28px', height: '28px' }}>
+          }`}>
             {isVideoOff ? (
-              <FiVideoOff 
-                size={28} 
+              <VideoOff 
+                size={24}
                 className="text-white" 
+                strokeWidth={2.5}
                 style={{ 
-                  display: 'inline-block', 
-                  width: '28px', 
-                  height: '28px', 
-                  color: '#ffffff', 
+                  display: 'block',
+                  width: '24px',
+                  height: '24px',
+                  color: '#ffffff',
+                  stroke: '#ffffff',
+                  fill: 'none',
                   opacity: 1,
                   visibility: 'visible'
-                }} 
+                }}
               />
             ) : (
-              <FiVideo 
-                size={28} 
+              <Video 
+                size={24}
                 className="text-white" 
+                strokeWidth={2.5}
                 style={{ 
-                  display: 'inline-block', 
-                  width: '28px', 
-                  height: '28px', 
-                  color: '#ffffff', 
+                  display: 'block',
+                  width: '24px',
+                  height: '24px',
+                  color: '#ffffff',
+                  stroke: '#ffffff',
+                  fill: 'none',
                   opacity: 1,
                   visibility: 'visible'
-                }} 
+                }}
               />
             )}
           </div>
@@ -211,7 +222,7 @@ export default function CallControls({
           <div className="absolute inset-0 rounded-full bg-white/10 scale-0 group-hover:scale-100 transition-transform duration-300 opacity-0 group-hover:opacity-100" />
         </button>
 
-        {/* Screen Share Button - Responsive size: 64px mobile, 56px tablet, 64px desktop */}
+        {/* Screen Share Button - Fixed 56px size */}
         {onScreenShare && (
           <button
             onClick={onScreenShare}
@@ -220,7 +231,7 @@ export default function CallControls({
               transition-all duration-300 ease-out
               hover:scale-110 active:scale-95 
               shadow-2xl border-2
-              w-16 h-16 sm:w-14 sm:h-14 md:w-16 md:h-16
+              w-14 h-14
               ${
                 isScreenSharing
                   ? 'bg-primary-500/95 hover:bg-primary-600 border-primary-400/60 shadow-primary-500/60'
@@ -228,7 +239,7 @@ export default function CallControls({
               }
               group overflow-hidden
             `}
-            style={{ minWidth: '64px', minHeight: '64px' }}
+            style={{ width: '56px', height: '56px', minWidth: '56px', minHeight: '56px' }}
             title={isScreenSharing ? 'Stop sharing' : 'Share screen'}
           >
             {/* Active state glow */}
@@ -239,41 +250,29 @@ export default function CallControls({
             {/* Glass morphism overlay */}
             <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-full z-0" />
             
-            <div className="relative z-20 flex items-center justify-center transition-all duration-300 group-hover:scale-110 group-hover:rotate-6" style={{ width: '28px', height: '28px' }}>
-              {isScreenSharing ? (
-                <MdDesktopMac 
-                  size={28} 
-                  className="text-white" 
-                  style={{ 
-                    display: 'inline-block', 
-                    width: '28px', 
-                    height: '28px', 
-                    color: '#ffffff', 
-                    opacity: 1,
-                    visibility: 'visible'
-                  }} 
-                />
-              ) : (
-                <FiMonitor 
-                  size={28} 
-                  className="text-white" 
-                  style={{ 
-                    display: 'inline-block', 
-                    width: '28px', 
-                    height: '28px', 
-                    color: '#ffffff', 
-                    opacity: 1,
-                    visibility: 'visible'
-                  }} 
-                />
-              )}
+            <div className="relative z-20 flex items-center justify-center transition-all duration-300 group-hover:scale-110 group-hover:rotate-6">
+              <Monitor 
+                size={24}
+                className="text-white" 
+                strokeWidth={2.5}
+                style={{ 
+                  display: 'block',
+                  width: '24px',
+                  height: '24px',
+                  color: '#ffffff',
+                  stroke: '#ffffff',
+                  fill: 'none',
+                  opacity: 1,
+                  visibility: 'visible'
+                }}
+              />
             </div>
             <div className="absolute inset-0 rounded-full bg-white/30 scale-0 group-active:scale-150 transition-all duration-500 opacity-0 group-active:opacity-100" />
             <div className="absolute inset-0 rounded-full bg-white/10 scale-0 group-hover:scale-100 transition-transform duration-300 opacity-0 group-hover:opacity-100" />
           </button>
         )}
 
-        {/* More Menu Button - Responsive size: 64px mobile, 56px tablet, 64px desktop */}
+        {/* More Menu Button - Fixed 56px size */}
         {(onAddParticipant || onSettings) && (
           <div className="relative" ref={menuRef}>
             <button
@@ -283,7 +282,7 @@ export default function CallControls({
                 transition-all duration-300 ease-out
                 hover:scale-110 active:scale-95 
                 shadow-2xl border-2
-                w-16 h-16 sm:w-14 sm:h-14 md:w-16 md:h-16
+                w-14 h-14
                 ${
                   showMoreMenu
                     ? 'bg-primary-500/95 hover:bg-primary-600 border-primary-400/60 shadow-primary-500/60'
@@ -291,7 +290,7 @@ export default function CallControls({
                 }
                 group overflow-hidden
               `}
-              style={{ minWidth: '64px', minHeight: '64px' }}
+              style={{ width: '56px', height: '56px', minWidth: '56px', minHeight: '56px' }}
               title="More options"
             >
               {/* Active state glow */}
@@ -306,32 +305,38 @@ export default function CallControls({
                 showMoreMenu 
                   ? 'rotate-180' 
                   : 'group-hover:rotate-90'
-              }`} style={{ width: '28px', height: '28px' }}>
+              }`}>
                 {showMoreMenu ? (
-                  <FiX 
-                    size={28} 
+                  <X 
+                    size={24}
                     className="text-white" 
+                    strokeWidth={2.5}
                     style={{ 
-                      display: 'inline-block', 
-                      width: '28px', 
-                      height: '28px', 
-                      color: '#ffffff', 
+                      display: 'block',
+                      width: '24px',
+                      height: '24px',
+                      color: '#ffffff',
+                      stroke: '#ffffff',
+                      fill: 'none',
                       opacity: 1,
                       visibility: 'visible'
-                    }} 
+                    }}
                   />
                 ) : (
-                  <FiMoreVertical 
-                    size={28} 
+                  <Settings 
+                    size={24}
                     className="text-white" 
+                    strokeWidth={2.5}
                     style={{ 
-                      display: 'inline-block', 
-                      width: '28px', 
-                      height: '28px', 
-                      color: '#ffffff', 
+                      display: 'block',
+                      width: '24px',
+                      height: '24px',
+                      color: '#ffffff',
+                      stroke: '#ffffff',
+                      fill: 'none',
                       opacity: 1,
                       visibility: 'visible'
-                    }} 
+                    }}
                   />
                 )}
               </div>
@@ -351,17 +356,10 @@ export default function CallControls({
                     className="w-full flex items-center space-x-3 px-4 py-3 rounded-xl hover:bg-dark-800/70 transition-all duration-200 text-left group hover:scale-[1.02]"
                   >
                     <div className="p-2 rounded-lg bg-primary-500/20 group-hover:bg-primary-500/30 transition">
-                      <FiUserPlus 
-                        size={16} 
+                      <UserPlus 
+                        size={20} 
                         className="text-primary-400 group-hover:text-primary-300 transition" 
-                        style={{ 
-                          display: 'inline-block', 
-                          width: '16px', 
-                          height: '16px', 
-                          color: '#60a5fa', 
-                          opacity: 1,
-                          visibility: 'visible'
-                        }} 
+                        strokeWidth={2.5}
                       />
                     </div>
                     <span className="text-white text-sm font-medium">Add Participant</span>
@@ -376,17 +374,10 @@ export default function CallControls({
                     className="w-full flex items-center space-x-3 px-4 py-3 rounded-xl hover:bg-dark-800/70 transition-all duration-200 text-left group hover:scale-[1.02] mt-1"
                   >
                     <div className="p-2 rounded-lg bg-primary-500/20 group-hover:bg-primary-500/30 transition">
-                      <FiSettings 
-                        size={16} 
+                      <Settings 
+                        size={20} 
                         className="text-primary-400 group-hover:text-primary-300 transition" 
-                        style={{ 
-                          display: 'inline-block', 
-                          width: '16px', 
-                          height: '16px', 
-                          color: '#60a5fa', 
-                          opacity: 1,
-                          visibility: 'visible'
-                        }} 
+                        strokeWidth={2.5}
                       />
                     </div>
                     <span className="text-white text-sm font-medium">Settings</span>
@@ -397,11 +388,11 @@ export default function CallControls({
           </div>
         )}
 
-        {/* End Call Button - Responsive size: 80px mobile, 72px tablet, 80px desktop */}
+        {/* End Call Button - Fixed 64px size (larger than others) */}
         <button
           onClick={handleEndCall}
-          className="w-20 h-20 sm:w-18 sm:h-18 md:w-20 md:h-20 relative rounded-full flex items-center justify-center transition-all duration-300 ease-out hover:scale-110 active:scale-95 shadow-2xl border-2 bg-red-500/95 hover:bg-red-600 border-red-400/60 shadow-red-500/60 group overflow-hidden"
-          style={{ minWidth: '80px', minHeight: '80px' }}
+          className="w-16 h-16 relative rounded-full flex items-center justify-center transition-all duration-300 ease-out hover:scale-110 active:scale-95 shadow-2xl border-2 bg-red-500/95 hover:bg-red-600 border-red-400/60 shadow-red-500/60 group overflow-hidden"
+          style={{ width: '64px', height: '64px', minWidth: '64px', minHeight: '64px' }}
           title="End call"
           aria-label="End call"
         >
@@ -413,18 +404,21 @@ export default function CallControls({
           {/* Glass morphism overlay */}
           <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-full z-0" />
           
-          <div className="relative z-20 flex items-center justify-center transition-all duration-300 group-hover:rotate-90 group-hover:scale-110" style={{ width: '32px', height: '32px' }}>
-            <MdCallEnd 
-              size={32} 
+          <div className="relative z-20 flex items-center justify-center transition-all duration-300 group-hover:rotate-90 group-hover:scale-110">
+            <PhoneOff 
+              size={24}
               className="text-white" 
+              strokeWidth={2.5}
               style={{ 
-                display: 'inline-block', 
-                width: '32px', 
-                height: '32px', 
-                color: '#ffffff', 
+                display: 'block',
+                width: '24px',
+                height: '24px',
+                color: '#ffffff',
+                stroke: '#ffffff',
+                fill: 'none',
                 opacity: 1,
                 visibility: 'visible'
-              }} 
+              }}
             />
           </div>
 
@@ -454,33 +448,19 @@ export default function CallControls({
               title="Close"
               aria-label="Close"
             >
-              <FiX 
+              <X 
                 size={20} 
                 className="text-dark-400 hover:text-white transition" 
-                style={{ 
-                  display: 'inline-block', 
-                  width: '20px', 
-                  height: '20px', 
-                  color: '#94a3b8', 
-                  opacity: 1,
-                  visibility: 'visible'
-                }} 
+                strokeWidth={2.5}
               />
             </button>
 
             <div className="flex items-start space-x-4 mb-6 pr-8">
               <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center flex-shrink-0 animate-pulse ring-4 ring-red-500/20">
-                <FiAlertTriangle 
-                  size={32} 
+                <AlertTriangle 
+                  size={24} 
                   className="text-red-400" 
-                  style={{ 
-                    display: 'inline-block', 
-                    width: '32px', 
-                    height: '32px', 
-                    color: '#f87171', 
-                    opacity: 1,
-                    visibility: 'visible'
-                  }} 
+                  strokeWidth={2.5}
                 />
               </div>
               <div className="flex-1 min-w-0 pt-1">
@@ -504,17 +484,20 @@ export default function CallControls({
                 className="flex-1 px-5 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 rounded-xl text-white font-semibold transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2 shadow-lg shadow-red-500/30 text-base"
                 style={{ height: '48px' }}
               >
-                <MdCallEnd 
+                <PhoneOff 
                   size={20} 
                   className="text-white" 
+                  strokeWidth={2.5}
                   style={{ 
-                    display: 'inline-block', 
-                    width: '20px', 
-                    height: '20px', 
-                    color: '#ffffff', 
+                    display: 'block',
+                    width: '20px',
+                    height: '20px',
+                    color: '#ffffff',
+                    stroke: '#ffffff',
+                    fill: 'none',
                     opacity: 1,
                     visibility: 'visible'
-                  }} 
+                  }}
                 />
                 <span>End Call</span>
               </button>

@@ -25,7 +25,8 @@ import {
   FiChevronUp,
   FiRefreshCw,
 } from 'react-icons/fi';
-import { FaMagic, FaStickyNote, FaRobot } from 'react-icons/fa';
+import { Sparkles, MessageSquare, FileText, StickyNote } from 'lucide-react';
+import { FaRobot } from 'react-icons/fa';
 import { useAuthStore } from '../store/auth';
 import { useCallStore } from '../store/call';
 import { toast } from '../components/Toast';
@@ -1366,7 +1367,7 @@ export default function CallRoom() {
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
                     <div className="flex items-center space-x-2 mb-1">
-                      <FaMagic size={16} className="text-purple-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                      <Sparkles size={16} className="text-purple-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                       <span className="text-purple-300 font-semibold text-sm">AI Suggestion</span>
                     </div>
                     <p className="text-white text-xs mb-2">
@@ -1382,7 +1383,7 @@ export default function CallRoom() {
                         {isGeneratingImage ? (
                           <FiLoader className="w-3 h-3 animate-spin" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                         ) : (
-                          <FaMagic size={12} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                          <Sparkles size={12} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                         )}
                         <span>Generate Image</span>
                       </button>
@@ -1406,14 +1407,14 @@ export default function CallRoom() {
                 </div>
               </div>
             )}
-            <div className="p-4 border-b border-dark-800/50">
-              <div className="space-y-3">
+            <div className="p-6 border-b border-dark-800/50">
+              <div className="space-y-4">
                 {/* Quick Generate from Call Button */}
                 {callId && transcript.length > 0 && (
                   <button
                     onClick={() => generateImageFromTranscript()}
                     disabled={isGeneratingImage}
-                    className="w-full px-4 py-2 bg-gradient-to-r from-blue-500/20 to-cyan-500/20 hover:from-blue-500/30 hover:to-cyan-500/30 border border-blue-500/30 rounded-lg text-blue-300 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+                    className="w-full px-4 py-3 bg-gradient-to-r from-blue-500/20 to-cyan-500/20 hover:from-blue-500/30 hover:to-cyan-500/30 border border-blue-500/30 rounded-lg text-blue-300 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
                   >
                     {isGeneratingImage ? (
                       <>
@@ -1421,28 +1422,30 @@ export default function CallRoom() {
                         <span>Generating from call...</span>
                       </>) : (
                       <>
-                        <FaMagic size={16} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                        <Sparkles size={16} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                         <span>Generate from Call Conversation</span>
                       </>
                     )}
                   </button>
                 )}
                 <div>
-                  <label className="text-xs text-dark-400 mb-1.5 block">Describe your vision</label>
+                  <label className="text-sm text-dark-300 mb-2 block font-medium">Describe your vision</label>
                   <textarea
                     value={imagePrompt}
                     onChange={(e) => setImagePrompt(e.target.value)}
                     placeholder="Describe what you want to see..."
-                    className="w-full px-3 py-2 bg-dark-800/50 border border-dark-700 rounded-lg text-white text-sm placeholder-dark-500 focus:outline-none focus:border-purple-500/50 glass-card"
-                    rows={3}
+                    className="w-full px-4 py-3 bg-dark-800/50 border border-dark-700 rounded-lg text-white text-sm placeholder-dark-500 focus:outline-none focus:border-purple-500/50 glass-card resize-none"
+                    rows={5}
+                    style={{ minHeight: '120px' }}
                   />
                 </div>
                 <div>
-                  <label className="text-xs text-dark-400 mb-1.5 block">Style</label>
+                  <label className="text-sm text-dark-300 mb-2 block font-medium">Style</label>
                   <select
                     value={imageStyle}
                     onChange={(e) => setImageStyle(e.target.value)}
-                    className="w-full px-3 py-2 bg-dark-800/50 border border-dark-700 rounded-lg text-white text-sm focus:outline-none focus:border-purple-500/50 glass-card"
+                    className="w-full px-4 py-3 bg-dark-800/50 border border-dark-700 rounded-lg text-white text-sm focus:outline-none focus:border-purple-500/50 glass-card"
+                    style={{ padding: '12px' }}
                   >
                     <option value="realistic">Realistic</option>
                     <option value="artistic">Artistic</option>
@@ -1454,7 +1457,8 @@ export default function CallRoom() {
                 <button
                   onClick={() => generateImage()}
                   disabled={!imagePrompt.trim() || isGeneratingImage}
-                  className="w-full px-4 py-2.5 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 rounded-lg text-white font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+                  className="w-full px-4 py-3 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 rounded-lg text-white font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+                  style={{ height: '48px' }}
                 >
                   {isGeneratingImage ? (
                     <>
@@ -1462,18 +1466,18 @@ export default function CallRoom() {
                       <span>Generating...</span>
                     </>) : (
                     <>
-                        <FaMagic size={16} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                        <Sparkles size={16} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                       <span>Generate Image</span>
                     </>
                   )}
                 </button>
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto p-4">
+            <div className="flex-1 overflow-y-auto p-6" style={{ minHeight: '300px' }}>
               {generatedImages.length === 0 ? (
-                <div className="h-full flex items-center justify-center text-center">
+                <div className="h-full flex items-center justify-center text-center" style={{ minHeight: '300px' }}>
                   <div>
-                    <FaMagic size={48} className="text-dark-700 mx-auto mb-2" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                    <Sparkles size={48} className="text-dark-700 mx-auto mb-2" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                     <p className="text-dark-500 text-sm">Generated images will appear here</p>
                   </div>
                 </div>
@@ -2013,7 +2017,7 @@ export default function CallRoom() {
               <div className="border-t border-dark-800/50 bg-dark-900/50 backdrop-blur-sm">
                 <div className="px-4 py-3 border-b border-dark-800/50 flex items-center justify-between">
                   <div className="flex items-center space-x-2">
-              <FaMagic size={16} className="text-purple-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+              <Sparkles size={16} className="text-purple-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                     <span className="text-white font-semibold text-sm">AI Insights</span>
                     {aiNotes.lastUpdated && (
                       <span className="text-dark-400 text-xs">
@@ -2026,7 +2030,7 @@ export default function CallRoom() {
                 {aiNotes.summary && (
                   <div className="glass-card rounded-lg p-3 border border-purple-500/20">
                     <h4 className="text-xs font-semibold text-purple-300 mb-2 uppercase tracking-wide flex items-center space-x-1">
-                      <FaMagic size={12} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                      <Sparkles size={12} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                       <span>Summary</span>
                     </h4>
                     <p className="text-white text-sm leading-relaxed">{aiNotes.summary}</p>
@@ -2113,7 +2117,7 @@ export default function CallRoom() {
             <div className="sticky top-0 z-10 bg-dark-900/95 backdrop-blur-xl border-b border-dark-800/50 px-4 py-3">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center space-x-2">
-                  <FaMagic size={20} className="text-purple-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                  <Sparkles size={20} className="text-purple-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                   <h1 className="text-white font-bold text-lg">
                     {comprehensiveNotes?.title || 'Meeting Notes'}
                   </h1>
@@ -2132,7 +2136,7 @@ export default function CallRoom() {
                         </>
                       ) : (
                         <>
-                          <FaMagic size={14} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                          <Sparkles size={14} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                           <span>Generate Notes</span>
                         </>
                       )}
@@ -2192,7 +2196,7 @@ export default function CallRoom() {
                   {comprehensiveNotes.summary && (
                     <section className="glass-card rounded-lg p-4 border border-purple-500/20">
                       <h2 className="text-white font-semibold text-base mb-3 flex items-center space-x-2">
-                        <FaMagic size={16} className="text-purple-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                        <Sparkles size={16} className="text-purple-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                         <span>Summary</span>
                       </h2>
                       <p className="text-white text-sm leading-relaxed">{comprehensiveNotes.summary}</p>
@@ -2484,7 +2488,7 @@ export default function CallRoom() {
                       </>
                     ) : (
                       <>
-                        <FaMagic size={16} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                        <Sparkles size={16} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                         <span>Generate Meeting Notes</span>
                       </>
                     )}
@@ -2761,11 +2765,12 @@ export default function CallRoom() {
             onClick={handleVideoTap}
             style={{ paddingTop: '48px', paddingBottom: '80px' }} // Space for tabs and controls
           >
-            {/* Call Controls - Positioned inside video area (Mobile) */}
-            {roomId && 
-             (callStatus === 'active' || callStatus === 'waiting') &&
-             activeRightTab === 'dreamweaving' && (
-              <div className="absolute bottom-6 sm:bottom-8 left-1/2 transform -translate-x-1/2 z-50 pointer-events-auto">
+            {/* Call Controls - Show during active/waiting call on call screen */}
+            {/* Show controls when: call is active or waiting, on call screen, not showing bottom sheet */}
+            {(callStatus === 'active' || callStatus === 'waiting') && 
+             activeRightTab === 'dreamweaving' &&
+             !showBottomSheet && (
+              <div className="absolute bottom-6 sm:bottom-8 left-1/2 transform -translate-x-1/2 z-[50] pointer-events-auto">
                 <CallControls
                   isMuted={isMuted}
                   isVideoOff={isVideoOff}
@@ -2881,11 +2886,12 @@ export default function CallRoom() {
               );
             })()}
 
-            {/* Call Controls - Positioned inside video area (Mobile) - After video grid so it appears on top */}
-            {roomId && 
-             (callStatus === 'active' || callStatus === 'waiting') &&
-             activeRightTab === 'dreamweaving' && (
-              <div className="absolute bottom-6 sm:bottom-8 left-1/2 transform -translate-x-1/2 z-50 pointer-events-auto">
+            {/* Call Controls - Show during active/waiting call on call screen (Mobile) */}
+            {/* Show controls when: call is active or waiting, on call screen, not showing bottom sheet */}
+            {(callStatus === 'active' || callStatus === 'waiting') && 
+             activeRightTab === 'dreamweaving' &&
+             !showBottomSheet && (
+              <div className="absolute bottom-6 sm:bottom-8 left-1/2 transform -translate-x-1/2 z-[50] pointer-events-auto">
                 <CallControls
                   isMuted={isMuted}
                   isVideoOff={isVideoOff}
@@ -2900,8 +2906,8 @@ export default function CallRoom() {
               </div>
             )}
 
-            {/* Mobile Bottom Tab Navigation */}
-            <div className="mobile-bottom-nav safe-area-bottom">
+            {/* Mobile Bottom Tab Navigation - Only show on mobile */}
+            <div className="mobile-bottom-nav safe-area-bottom md:hidden">
               {(['dreamweaving', 'chat', 'transcript', 'notes'] as RightTab[]).map((tab) => (
                 <button
                   key={tab}
@@ -2916,21 +2922,21 @@ export default function CallRoom() {
                   }`}
                 >
                   {tab === 'dreamweaving' && (
-                    <FaMagic size={20} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                    <Sparkles size={24} className="text-current" strokeWidth={2.5} style={{ display: 'block', opacity: 1, visibility: 'visible' }} />
                   )}
                   {tab === 'chat' && (
                     <div className="relative">
-                      <FiMessageSquare size={20} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                      <MessageSquare size={24} className="text-current" strokeWidth={2.5} style={{ display: 'block', opacity: 1, visibility: 'visible' }} />
                       {(unreadPrivateMessages.length > 0 || showPrivateChatOverlay) && (
                         <span className="absolute -top-1 -right-1 w-2 h-2 bg-primary-500 rounded-full animate-pulse" />
                       )}
                     </div>
                   )}
                   {tab === 'transcript' && (
-                    <FiFileText size={20} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                    <FileText size={24} className="text-current" strokeWidth={2.5} style={{ display: 'block', opacity: 1, visibility: 'visible' }} />
                   )}
                   {tab === 'notes' && (
-                    <FiFileText size={20} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                    <StickyNote size={24} className="text-current" strokeWidth={2.5} style={{ display: 'block', opacity: 1, visibility: 'visible' }} />
                   )}
                   <span className="text-xs font-medium capitalize">{tab === 'dreamweaving' ? 'Dream' : tab}</span>
                 </button>
@@ -2998,30 +3004,18 @@ export default function CallRoom() {
                 >
                   <div className="flex items-center justify-center space-x-1.5">
                     {tab === 'dreamweaving' && (
-                      <FaMagic 
-                        size={16}
-                        className="flex-shrink-0" 
-                        style={{ 
-                          display: 'inline-block', 
-                          width: '16px', 
-                          height: '16px', 
-                          opacity: 1,
-                          visibility: 'visible'
-                        }} 
+                      <Sparkles 
+                        size={20}
+                        className="flex-shrink-0 text-current" 
+                        strokeWidth={2.5}
                       />
                     )}
                     {tab === 'chat' && (
                       <div className="relative">
-                        <FiMessageSquare 
-                          size={16}
-                          className="flex-shrink-0" 
-                          style={{ 
-                            display: 'inline-block', 
-                            width: '16px', 
-                            height: '16px', 
-                            opacity: 1,
-                            visibility: 'visible'
-                          }} 
+                        <MessageSquare 
+                          size={20}
+                          className="flex-shrink-0 text-current" 
+                          strokeWidth={2.5}
                         />
                         {(unreadPrivateMessages.length > 0 || showPrivateChatOverlay) && (
                           <span className="absolute -top-1 -right-1 w-2 h-2 bg-primary-500 rounded-full animate-pulse" />
@@ -3029,29 +3023,17 @@ export default function CallRoom() {
                       </div>
                     )}
                     {tab === 'transcript' && (
-                      <FiFileText 
-                        size={16}
-                        className="flex-shrink-0" 
-                        style={{ 
-                          display: 'inline-block', 
-                          width: '16px', 
-                          height: '16px', 
-                          opacity: 1,
-                          visibility: 'visible'
-                        }} 
+                      <FileText 
+                        size={20}
+                        className="flex-shrink-0 text-current" 
+                        strokeWidth={2.5}
                       />
                     )}
                     {tab === 'notes' && (
-                      <FaStickyNote 
-                        size={16}
-                        className="flex-shrink-0" 
-                        style={{ 
-                          display: 'inline-block', 
-                          width: '16px', 
-                          height: '16px', 
-                          opacity: 1,
-                          visibility: 'visible'
-                        }} 
+                      <StickyNote 
+                        size={20}
+                        className="flex-shrink-0 text-current" 
+                        strokeWidth={2.5}
                       />
                     )}
                     <span className="capitalize">{tab === 'dreamweaving' ? 'Dream' : tab === 'transcript' ? 'Transcript' : tab}</span>
@@ -3318,11 +3300,11 @@ export default function CallRoom() {
               );
             })()}
 
-            {/* Call Controls - Positioned inside video area (Desktop) - After video grid so it appears on top */}
-            {roomId && 
-             (callStatus === 'active' || callStatus === 'waiting') &&
+            {/* Call Controls - Show during active/waiting call on call screen (Desktop) */}
+            {/* Show controls when: call is active or waiting, on call screen */}
+            {(callStatus === 'active' || callStatus === 'waiting') && 
              activeRightTab === 'dreamweaving' && (
-              <div className="absolute bottom-6 sm:bottom-8 left-1/2 transform -translate-x-1/2 z-50 pointer-events-auto">
+              <div className="absolute bottom-6 sm:bottom-8 left-1/2 transform -translate-x-1/2 z-[50] pointer-events-auto">
                 <CallControls
                   isMuted={isMuted}
                   isVideoOff={isVideoOff}
@@ -3366,7 +3348,7 @@ export default function CallRoom() {
                   >
                     <div className="flex items-center justify-center space-x-1.5">
                       {tab === 'dreamweaving' && (
-                      <FaMagic 
+                      <Sparkles 
                         size={16}
                         className="flex-shrink-0" 
                         style={{ 
@@ -3380,13 +3362,14 @@ export default function CallRoom() {
                       )}
                       {tab === 'chat' && (
                         <div className="relative">
-                          <FiMessageSquare 
-                            size={16}
-                            className="flex-shrink-0" 
+                          <MessageSquare 
+                            size={20}
+                            className="flex-shrink-0 text-current" 
+                            strokeWidth={2.5}
                             style={{ 
-                              display: 'inline-block', 
-                              width: '16px', 
-                              height: '16px', 
+                              display: 'block', 
+                              width: '20px', 
+                              height: '20px', 
                               opacity: 1,
                               visibility: 'visible'
                             }} 
@@ -3397,26 +3380,28 @@ export default function CallRoom() {
                         </div>
                       )}
                       {tab === 'transcript' && (
-                        <FiFileText 
-                          size={16}
-                          className="flex-shrink-0" 
+                        <FileText 
+                          size={20}
+                          className="flex-shrink-0 text-current" 
+                          strokeWidth={2.5}
                           style={{ 
-                            display: 'inline-block', 
-                            width: '16px', 
-                            height: '16px', 
+                            display: 'block', 
+                            width: '20px', 
+                            height: '20px', 
                             opacity: 1,
                             visibility: 'visible'
                           }} 
                         />
                       )}
                       {tab === 'notes' && (
-                        <FaStickyNote 
-                          size={16}
-                          className="flex-shrink-0" 
+                        <StickyNote 
+                          size={20}
+                          className="flex-shrink-0 text-current" 
+                          strokeWidth={2.5}
                           style={{ 
-                            display: 'inline-block', 
-                            width: '16px', 
-                            height: '16px', 
+                            display: 'block', 
+                            width: '20px', 
+                            height: '20px', 
                             opacity: 1,
                             visibility: 'visible'
                           }} 

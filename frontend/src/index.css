@@ -617,8 +617,12 @@ button[class*="rounded-full"] svg.lucide-react,
 .z-\[9999\] .react-icons,
 .z-\[9999\] button svg,
 button svg[class*="Fi"],
-button svg[class*="Md"] {
-  display: inline-block !important;
+button svg[class*="Md"],
+/* Lucide-react icons in call controls */
+button svg[class*="lucide"],
+button .lucide,
+[class*="lucide"] svg {
+  display: block !important;
   visibility: visible !important;
   opacity: 1 !important;
   color: #ffffff !important;

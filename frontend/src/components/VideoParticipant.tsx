@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { VideoOff, Mic, MicOff } from 'lucide-react';
+import { FiVideoOff as VideoOff, FiMic as Mic, FiMicOff as MicOff } from 'react-icons/fi';
 import { useAudioLevel } from '../hooks/useAudioLevel';
 import { SpeakingBorder, AudioWaveform, SpeakingPulse } from './SpeakingIndicator';
 
@@ -63,6 +63,14 @@ export default function VideoParticipant({
     }
   }, [stream]);
 
+  // CRITICAL: Track stream ID and track count to detect changes even if stream object reference is the same
+  // These must be computed outside useEffect so they can be used in the dependency array
+  const videoTracks = stream?.getVideoTracks() || [];
+  const videoTrack = videoTracks[0];
+  const streamId = stream?.id || '';
+  const videoTrackId = videoTrack?.id || '';
+  const videoTrackCount = videoTracks.length;
+
   // Handle video stream attachment and playback
   useEffect(() => {
     const videoElement = videoRef.current;
@@ -80,8 +88,6 @@ export default function VideoParticipant({
     }
     
     // Determine if we should show video
-    const videoTracks = stream?.getVideoTracks() || [];
-    const videoTrack = videoTracks[0];
     const trackExists = !!videoTrack;
     const trackEnabled = videoTrack?.enabled && !videoTrack.muted;
     const trackActive = videoTrack?.readyState === 'live';
@@ -101,14 +107,24 @@ export default function VideoParticipant({
     });
     
     if (shouldShowVideo && stream && videoTrack) {
-      // CRITICAL: Always set srcObject when stream changes
+      // CRITICAL: Always set srcObject when stream changes or tracks are added
       const currentSrcObject = videoElement.srcObject as MediaStream | null;
       const streamChanged = !currentSrcObject || currentSrcObject.id !== stream.id;
       
-      if (streamChanged) {
+      // Also check if tracks changed (important for merged streams that get tracks added incrementally)
+      const currentVideoTracks = currentSrcObject?.getVideoTracks() || [];
+      const currentVideoTrackId = currentVideoTracks[0]?.id;
+      const newVideoTrackId = videoTrack.id;
+      const tracksChanged = currentVideoTrackId !== newVideoTrackId;
+      
+      if (streamChanged || tracksChanged) {
         console.log('[VIDEO PARTICIPANT] 🔄 Setting new video stream:', {
           oldStreamId: currentSrcObject?.id,
           newStreamId: stream.id,
+          oldTrackId: currentVideoTrackId,
+          newTrackId: newVideoTrackId,
+          streamChanged,
+          tracksChanged,
           userName,
           isLocal,
         });
@@ -125,6 +141,7 @@ export default function VideoParticipant({
               streamId: stream.id,
               videoTracks: stream.getVideoTracks().length,
               audioTracks: stream.getAudioTracks().length,
+              videoTrackId: videoTrack.id,
               userName,
             });
             
@@ -250,7 +267,9 @@ export default function VideoParticipant({
         // Don't clear srcObject here as it might be needed by other components
       }
     };
-  }, [stream, isVideoOff, isLocal, userName]);
+    // CRITICAL: Include streamId, videoTrackId, and videoTrackCount in dependencies
+    // to ensure effect runs when tracks are added to an existing stream
+  }, [stream, isVideoOff, isLocal, userName, streamId, videoTrackId, videoTrackCount]);
 
   // Get initials from name
   const getInitials = (name: string) => {
@@ -395,7 +414,7 @@ export default function VideoParticipant({
           )}
           {isVideoOff && (
             <div className="absolute inset-0 flex items-center justify-center bg-dark-900/50">
-              <VideoOff className="w-8 h-8 text-dark-400" />
+              <VideoOff size={32} className="text-dark-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
             </div>
           )}
         </div>
@@ -416,14 +435,14 @@ export default function VideoParticipant({
           <div className="flex items-center space-x-1.5 flex-shrink-0">
             {isMuted && (
               <div className="bg-red-500/80 rounded-full p-1">
-                <MicOff className="w-3 h-3 text-white" />
+                <MicOff size={12} className="text-white" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
               </div>
             )}
             {!isMuted && (
               <div className={`rounded-full p-1 transition-colors duration-300 ${
                 isSpeaking ? 'bg-green-500/80' : 'bg-dark-800/80'
               }`}>
-                <Mic className="w-3 h-3 text-white" />
+                <Mic size={12} className="text-white" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
               </div>
             )}
           </div>

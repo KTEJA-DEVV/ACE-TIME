@@ -1,33 +1,31 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  MessageSquare,
-  Sparkles,
-  Copy,
-  Check,
-  Users,
-  Wand2,
-  Loader2,
-  X,
-  Send,
-  Image as ImageIcon,
-  Paperclip,
-  Clock,
-  Smile,
-  FileText,
-  StickyNote,
-  Reply,
-  Forward,
-  AtSign,
-  Bot,
-  ThumbsUp,
-  CheckCircle,
-  Download,
-  Share2,
-  Calendar,
-  ChevronDown,
-  ChevronUp,
-} from 'lucide-react';
+  FiMessageSquare,
+  FiCopy,
+  FiCheck,
+  FiUsers,
+  FiLoader,
+  FiX,
+  FiSend,
+  FiImage,
+  FiPaperclip,
+  FiClock,
+  FiSmile,
+  FiFileText,
+  FiCornerUpLeft,
+  FiCornerUpRight,
+  FiAtSign,
+  FiThumbsUp,
+  FiCheckCircle,
+  FiDownload,
+  FiShare2,
+  FiCalendar,
+  FiChevronDown,
+  FiChevronUp,
+  FiRefreshCw,
+} from 'react-icons/fi';
+import { FaMagic, FaStickyNote, FaRobot } from 'react-icons/fa';
 import { useAuthStore } from '../store/auth';
 import { useCallStore } from '../store/call';
 import { toast } from '../components/Toast';
@@ -61,6 +59,7 @@ export default function CallRoom() {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const chatMessagesEndRef = useRef<HTMLDivElement>(null);
   
   const { user, accessToken } = useAuthStore();
   const callStore = useCallStore();
@@ -120,6 +119,11 @@ export default function CallRoom() {
     style: string;
     createdAt: string;
   }>>([]);
+  
+  // Auto image generation state
+  const [showImageSuggestion, setShowImageSuggestion] = useState(false);
+  const [suggestedPrompt, setSuggestedPrompt] = useState('');
+  const [detectedConcept, setDetectedConcept] = useState('');
   
   // Chat tab state
   const [chatMessages, setChatMessages] = useState<Array<{
@@ -376,11 +380,72 @@ export default function CallRoom() {
   useEffect(() => {
     if (transcriptRef.current && transcript.length > 0) {
       // Auto-scroll transcript to latest entry
-      if (transcriptRef.current) {
       transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
-      }
     }
   }, [transcript]);
+
+  // Auto-scroll chat messages to bottom when new messages arrive
+  useEffect(() => {
+    if (chatMessagesEndRef.current && chatMessages.length > 0) {
+      chatMessagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages]);
+
+  // Keyword detection for automatic image generation
+  useEffect(() => {
+    if (!callId || callStatus !== 'active') return;
+
+    // Combine transcript and interim transcript for analysis
+    const fullText = [...transcript, ...(interimTranscript ? [{ text: interimTranscript, speaker: user?.name || 'You' }] : [])]
+      .map(seg => seg.text || '')
+      .join(' ')
+      .toLowerCase();
+
+    // Visual concept keywords
+    const visualKeywords = [
+      'product design', 'logo', 'architecture', 'building', 'website design', 'ui design',
+      'app design', 'brand', 'visual', 'image', 'picture', 'illustration', 'sketch',
+      'drawing', 'mockup', 'prototype', 'concept art', 'graphic', 'banner', 'poster',
+      'show me', 'visualize', 'imagine', 'create image', 'generate image', 'make an image'
+    ];
+
+    // Check for voice commands
+    const voiceCommands = [
+      'ai, show me', 'ai show me', 'show me', 'visualize', 'generate image of',
+      'create image of', 'make an image of', 'draw', 'illustrate'
+    ];
+
+    // Check for voice commands first
+    for (const cmd of voiceCommands) {
+      if (fullText.includes(cmd)) {
+        const afterCommand = fullText.split(cmd)[1]?.trim();
+        if (afterCommand && afterCommand.length > 10) {
+          setDetectedConcept(afterCommand.substring(0, 100));
+          setSuggestedPrompt(afterCommand.substring(0, 200));
+          setShowImageSuggestion(true);
+          return;
+        }
+      }
+    }
+
+    // Check for visual keywords
+    for (const keyword of visualKeywords) {
+      if (fullText.includes(keyword)) {
+        // Extract context around the keyword
+        const keywordIndex = fullText.indexOf(keyword);
+        const contextStart = Math.max(0, keywordIndex - 50);
+        const contextEnd = Math.min(fullText.length, keywordIndex + keyword.length + 100);
+        const context = fullText.substring(contextStart, contextEnd).trim();
+        
+        if (context.length > 20) {
+          setDetectedConcept(keyword);
+          setSuggestedPrompt(context);
+          setShowImageSuggestion(true);
+          return;
+        }
+      }
+    }
+  }, [transcript, interimTranscript, callId, callStatus, user?.name]);
 
   // Cleanup on browser close/refresh
   useEffect(() => {
@@ -908,8 +973,50 @@ export default function CallRoom() {
     toast.info('Settings', 'Settings panel coming soon');
   };
 
-  const generateImage = async () => {
-    if (!accessToken || !imagePrompt.trim()) {
+  // Generate image from transcript automatically
+  const generateImageFromTranscript = async (prompt?: string) => {
+    if (!accessToken || !callId) {
+      toast.error('Error', 'Call ID is required');
+      return;
+    }
+
+    setIsGeneratingImage(true);
+    setShowImageSuggestion(false);
+    
+    try {
+      const response = await fetch(`${API_URL}/api/images/generate-from-call`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          callId,
+          style: imageStyle,
+          prompt: prompt || suggestedPrompt, // Use provided prompt or suggested one
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to generate image from transcript');
+      }
+
+      const data = await response.json();
+      if (data.image) {
+        setGeneratedImages(prev => [data.image, ...prev]);
+        toast.success('Image Generated', 'Generated from call conversation!');
+      }
+    } catch (error: any) {
+      console.error('Auto image generation error:', error);
+      toast.error('Error', error.message || 'Failed to generate image');
+    } finally {
+      setIsGeneratingImage(false);
+    }
+  };
+
+  const generateImage = async (customPrompt?: string) => {
+    const promptToUse = customPrompt || imagePrompt;
+    if (!accessToken || !promptToUse.trim()) {
       toast.error('Error', 'Please enter a description');
       return;
     }
@@ -923,7 +1030,7 @@ export default function CallRoom() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          prompt: imagePrompt,
+          prompt: promptToUse,
           style: imageStyle,
           callId: callId || undefined,
         }),
@@ -1253,8 +1360,73 @@ export default function CallRoom() {
       case 'dreamweaving':
         return (
           <div className="h-full flex flex-col">
+            {/* Auto Image Generation Suggestion */}
+            {showImageSuggestion && suggestedPrompt && (
+              <div className="mx-4 mt-4 p-3 bg-gradient-to-r from-purple-500/20 to-blue-500/20 border border-purple-500/30 rounded-lg animate-fade-in">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center space-x-2 mb-1">
+                      <FaMagic size={16} className="text-purple-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                      <span className="text-purple-300 font-semibold text-sm">AI Suggestion</span>
+                    </div>
+                    <p className="text-white text-xs mb-2">
+                      Detected visual concept: <span className="text-purple-300 font-medium">"{detectedConcept}"</span>
+                    </p>
+                    <p className="text-dark-300 text-xs mb-2 italic">"{suggestedPrompt.substring(0, 100)}..."</p>
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => generateImageFromTranscript()}
+                        disabled={isGeneratingImage}
+                        className="px-3 py-1.5 bg-purple-500 hover:bg-purple-600 text-white text-xs rounded-lg transition flex items-center space-x-1.5"
+                      >
+                        {isGeneratingImage ? (
+                          <FiLoader className="w-3 h-3 animate-spin" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                        ) : (
+                          <FaMagic size={12} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                        )}
+                        <span>Generate Image</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setImagePrompt(suggestedPrompt);
+                          setShowImageSuggestion(false);
+                        }}
+                        className="px-3 py-1.5 bg-dark-700 hover:bg-dark-600 text-white text-xs rounded-lg transition"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => setShowImageSuggestion(false)}
+                        className="px-3 py-1.5 text-dark-400 hover:text-white text-xs transition"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="p-4 border-b border-dark-800/50">
               <div className="space-y-3">
+                {/* Quick Generate from Call Button */}
+                {callId && transcript.length > 0 && (
+                  <button
+                    onClick={() => generateImageFromTranscript()}
+                    disabled={isGeneratingImage}
+                    className="w-full px-4 py-2 bg-gradient-to-r from-blue-500/20 to-cyan-500/20 hover:from-blue-500/30 hover:to-cyan-500/30 border border-blue-500/30 rounded-lg text-blue-300 font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+                  >
+                    {isGeneratingImage ? (
+                      <>
+                        <FiLoader className="w-4 h-4 animate-spin" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                        <span>Generating from call...</span>
+                      </>) : (
+                      <>
+                        <FaMagic size={16} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                        <span>Generate from Call Conversation</span>
+                      </>
+                    )}
+                  </button>
+                )}
                 <div>
                   <label className="text-xs text-dark-400 mb-1.5 block">Describe your vision</label>
                   <textarea
@@ -1280,17 +1452,17 @@ export default function CallRoom() {
                   </select>
                 </div>
                 <button
-                  onClick={generateImage}
+                  onClick={() => generateImage()}
                   disabled={!imagePrompt.trim() || isGeneratingImage}
                   className="w-full px-4 py-2.5 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 rounded-lg text-white font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
                 >
                   {isGeneratingImage ? (
                     <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <FiLoader className="w-4 h-4 animate-spin" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                       <span>Generating...</span>
                     </>) : (
                     <>
-                      <Wand2 className="w-4 h-4" />
+                        <FaMagic size={16} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                       <span>Generate Image</span>
                     </>
                   )}
@@ -1301,7 +1473,7 @@ export default function CallRoom() {
               {generatedImages.length === 0 ? (
                 <div className="h-full flex items-center justify-center text-center">
                   <div>
-                    <Wand2 className="w-12 h-12 text-dark-700 mx-auto mb-2" />
+                    <FaMagic size={48} className="text-dark-700 mx-auto mb-2" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                     <p className="text-dark-500 text-sm">Generated images will appear here</p>
                   </div>
                 </div>
@@ -1310,16 +1482,59 @@ export default function CallRoom() {
                   {generatedImages.map((img) => (
                     <div
                       key={img._id}
-                      className="glass-card-hover rounded-lg overflow-hidden cursor-pointer animate-scale-in"
-                      onClick={() => window.open(img.imageUrl, '_blank')}
+                      className="glass-card-hover rounded-lg overflow-hidden animate-scale-in group"
                     >
-                      <img
-                        src={img.imageUrl}
-                        alt={img.prompt}
-                        className="w-full h-32 object-cover"
-                      />
+                      <div 
+                        className="relative cursor-pointer"
+                        onClick={() => window.open(img.imageUrl, '_blank')}
+                      >
+                        <img
+                          src={img.imageUrl}
+                          alt={img.prompt}
+                          className="w-full h-32 object-cover"
+                        />
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all flex items-center justify-center opacity-0 group-hover:opacity-100">
+                          <span className="text-white text-xs font-medium">Click to view</span>
+                        </div>
+                      </div>
                       <div className="p-2">
-                        <p className="text-dark-300 text-xs truncate">{img.prompt}</p>
+                        <p className="text-dark-300 text-xs mb-2 line-clamp-2" title={img.prompt}>
+                          "{img.prompt}"
+                        </p>
+                        <div className="flex items-center justify-between text-xs text-dark-500 mb-2">
+                          <span>{new Date(img.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          <span className="px-1.5 py-0.5 bg-purple-500/20 text-purple-300 rounded text-xs">{img.style}</span>
+                        </div>
+                        <div className="flex items-center space-x-2 pt-2 border-t border-dark-800/50">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              // Download image
+                              const link = document.createElement('a');
+                              link.href = img.imageUrl;
+                              link.download = `image-${img._id}.png`;
+                              link.click();
+                              toast.success('Downloaded', 'Image saved to downloads');
+                            }}
+                            className="flex-1 px-2 py-1 bg-dark-700 hover:bg-dark-600 text-white text-xs rounded transition flex items-center justify-center space-x-1"
+                            title="Download"
+                          >
+                            <FiDownload size={12} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                            <span>Save</span>
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              generateImage(img.prompt).catch(console.error);
+                            }}
+                            disabled={isGeneratingImage}
+                            className="flex-1 px-2 py-1 bg-dark-700 hover:bg-dark-600 text-white text-xs rounded transition flex items-center justify-center space-x-1 disabled:opacity-50"
+                            title="Regenerate"
+                          >
+                            <FiRefreshCw size={12} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                            <span>Regenerate</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -1330,12 +1545,28 @@ export default function CallRoom() {
         );
       case 'chat':
         return (
-          <div className="h-full flex flex-col">
-            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          <div className={`h-full flex flex-col ${isMobile ? 'mobile-overlay' : ''}`}>
+            {isMobile && (
+              <div className="px-4 py-3 border-b border-dark-800/50 flex items-center justify-between glass-card sticky top-0 z-10 bg-dark-900/95 backdrop-blur-xl safe-area-top">
+                <div className="flex items-center space-x-2">
+                  <div className="w-7 h-7 bg-primary-500/20 rounded-lg flex items-center justify-center">
+                    <FiMessageSquare size={16} className="text-primary-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                  </div>
+                  <span className="text-white font-semibold text-sm">Chat</span>
+                </div>
+                <button
+                  onClick={() => setShowBottomSheet(false)}
+                  className="p-2 hover:bg-dark-800/50 rounded-lg transition"
+                >
+                  <FiX size={20} className="text-white" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                </button>
+              </div>
+            )}
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 safe-area-bottom">
               {chatMessages.length === 0 ? (
                 <div className="h-full flex items-center justify-center text-center">
                   <div>
-                    <MessageSquare className="w-12 h-12 text-dark-700 mx-auto mb-2" />
+                    <FiMessageSquare size={48} className="text-dark-700 mx-auto mb-2" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                     <p className="text-dark-500 text-sm">Chat messages will appear here</p>
                   </div>
                 </div>
@@ -1349,7 +1580,7 @@ export default function CallRoom() {
                           {/* AI Avatar */}
                           <div className="flex items-start space-x-3">
                             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-cyan-500 flex items-center justify-center flex-shrink-0 shadow-lg">
-                              <Bot className="w-5 h-5 text-white" />
+                              <FaRobot size={20} className="text-white" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                             </div>
                             <div className="flex-1 min-w-0">
                               {/* Message Header */}
@@ -1364,14 +1595,23 @@ export default function CallRoom() {
                               </div>
                               {/* Message Text */}
                               <div className="text-white text-sm leading-relaxed">
-                                {msg.content || (msg.aiStreaming ? (
-                                  <span className="flex items-center space-x-2">
-                                    <Loader2 className="w-4 h-4 animate-spin text-purple-400" />
-                                    <span className="text-purple-300">AI is thinking...</span>
+                                {msg.aiStreaming && !msg.content ? (
+                                  <span className="flex items-center space-x-2 text-purple-300">
+                                    <FiLoader className="w-4 h-4 animate-spin text-purple-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                                    <span>AI is thinking</span>
+                                    <span className="flex space-x-1">
+                                      <span className="animate-pulse">.</span>
+                                      <span className="animate-pulse" style={{ animationDelay: '0.2s' }}>.</span>
+                                      <span className="animate-pulse" style={{ animationDelay: '0.4s' }}>.</span>
+                                    </span>
                                   </span>
-                                ) : '')}
-                                {msg.aiStreaming && (
-                                  <span className="inline-block w-2 h-4 bg-purple-400 ml-1 animate-pulse" />
+                                ) : (
+                                  <>
+                                    <span>{msg.content}</span>
+                                    {msg.aiStreaming && (
+                                      <span className="inline-block w-2 h-4 bg-purple-400 ml-1 animate-pulse" />
+                                    )}
+                                  </>
                                 )}
                               </div>
                               {/* Message Actions */}
@@ -1384,14 +1624,14 @@ export default function CallRoom() {
                                   className="flex items-center space-x-1 px-2 py-1 text-xs text-purple-300 hover:text-purple-200 hover:bg-purple-500/20 rounded transition"
                                   title="Copy"
                                 >
-                                  <Copy className="w-3 h-3" />
+                                  <FiCopy size={12} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                                   <span>Copy</span>
                                 </button>
                                 <button
                                   className="flex items-center space-x-1 px-2 py-1 text-xs text-purple-300 hover:text-purple-200 hover:bg-purple-500/20 rounded transition"
                                   title="Helpful"
                                 >
-                                  <ThumbsUp className="w-3 h-3" />
+                                  <FiThumbsUp size={12} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                                   <span>Helpful</span>
                                 </button>
                               </div>
@@ -1479,7 +1719,7 @@ export default function CallRoom() {
                                   rel="noopener noreferrer"
                                   className="flex items-center space-x-2 text-primary-400 hover:text-primary-300"
                                 >
-                                  <Paperclip className="w-4 h-4" />
+                                  <FiPaperclip size={16} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                                   <span className="text-sm">{att.name}</span>
                                 </a>
                               )}
@@ -1523,7 +1763,7 @@ export default function CallRoom() {
                           className="text-dark-400 hover:text-dark-300 transition"
                           title="Add reaction"
                         >
-                          <Smile className="w-4 h-4" />
+                          <FiSmile size={16} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                         </button>
                         {showReactionPicker === msg._id && (
                           <div className="flex items-center space-x-1 bg-dark-800 rounded-lg p-2 border border-dark-700">
@@ -1554,6 +1794,7 @@ export default function CallRoom() {
                 );
                 })
               )}
+              <div ref={chatMessagesEndRef} />
             </div>
             {/* Quick AI Actions */}
             {activeRightTab === 'chat' && (callStatus === 'active' || callStatus === 'waiting') && (
@@ -1564,28 +1805,37 @@ export default function CallRoom() {
                     onClick={() => setNewChatMessage('/ai summarize this call')}
                     className="px-3 py-1.5 bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 text-xs rounded-lg border border-purple-500/30 transition flex items-center space-x-1.5 flex-shrink-0"
                   >
-                    <FileText className="w-3.5 h-3.5" />
+                    <FiFileText size={14} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                     <span>Summarize</span>
                   </button>
                   <button
-                    onClick={() => setNewChatMessage('/ai what are the action items?')}
+                    onClick={() => {
+                      setNewChatMessage('/ai what are the action items?');
+                      setTimeout(() => sendChatMessage(), 100);
+                    }}
                     className="px-3 py-1.5 bg-green-500/20 hover:bg-green-500/30 text-green-300 text-xs rounded-lg border border-green-500/30 transition flex items-center space-x-1.5 flex-shrink-0"
                   >
-                    <CheckCircle className="w-3.5 h-3.5" />
+                    <FiCheckCircle size={14} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                     <span>Action Items</span>
                   </button>
                   <button
-                    onClick={() => setNewChatMessage('/ai generate meeting notes')}
+                    onClick={() => {
+                      setNewChatMessage('/ai generate meeting notes');
+                      setTimeout(() => sendChatMessage(), 100);
+                    }}
                     className="px-3 py-1.5 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 text-xs rounded-lg border border-blue-500/30 transition flex items-center space-x-1.5 flex-shrink-0"
                   >
-                    <FileText className="w-3.5 h-3.5" />
+                    <FiFileText size={14} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                     <span>Notes</span>
                   </button>
                   <button
-                    onClick={() => setNewChatMessage('/ai key decisions made')}
+                    onClick={() => {
+                      setNewChatMessage('/ai key decisions made');
+                      setTimeout(() => sendChatMessage(), 100);
+                    }}
                     className="px-3 py-1.5 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 text-xs rounded-lg border border-yellow-500/30 transition flex items-center space-x-1.5 flex-shrink-0"
                   >
-                    <CheckCircle className="w-3.5 h-3.5" />
+                    <FiCheckCircle size={14} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                     <span>Decisions</span>
                   </button>
                 </div>
@@ -1599,16 +1849,16 @@ export default function CallRoom() {
                   {selectedFiles.map((file, idx) => (
                     <div key={idx} className="flex items-center space-x-2 bg-dark-800 rounded-lg p-2">
                       {file.type.startsWith('image/') ? (
-                        <ImageIcon className="w-4 h-4 text-primary-400" />
+                        <FiImage size={16} className="text-primary-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                       ) : (
-                        <Paperclip className="w-4 h-4 text-primary-400" />
+                        <FiPaperclip size={16} className="text-primary-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                       )}
                       <span className="text-sm text-dark-300 truncate max-w-[150px]">{file.name}</span>
                       <button
                         onClick={() => setSelectedFiles(selectedFiles.filter((_, i) => i !== idx))}
                         className="text-dark-500 hover:text-dark-300"
                       >
-                        <X className="w-3 h-3" />
+                        <FiX size={12} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                       </button>
                     </div>
                   ))}
@@ -1628,7 +1878,7 @@ export default function CallRoom() {
                   className="p-2 bg-dark-800/50 hover:bg-dark-700/50 rounded-lg transition"
                   title="Attach file"
                 >
-                  <Paperclip className="w-4 h-4 text-dark-400" />
+                  <FiPaperclip size={16} className="text-dark-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                 </button>
                 <input
                   type="text"
@@ -1647,7 +1897,7 @@ export default function CallRoom() {
                   {uploading ? (
                     <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   ) : (
-                    <Send className="w-4 h-4 text-white" />
+                    <FiSend size={16} className="text-white" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                   )}
                 </button>
               </div>
@@ -1661,7 +1911,7 @@ export default function CallRoom() {
         return (
             <div className="h-full flex items-center justify-center text-center">
               <div>
-                <MessageSquare className="w-12 h-12 text-dark-700 mx-auto mb-2" />
+                <FiMessageSquare size={48} className="text-dark-700 mx-auto mb-2" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                 <p className="text-dark-500 text-sm">Transcript will appear here once the call starts</p>
               </div>
             </div>
@@ -1672,7 +1922,7 @@ export default function CallRoom() {
             <div className="px-4 py-3 border-b border-dark-800/50 flex items-center justify-between glass-card sticky top-0 z-10 bg-dark-900/95 backdrop-blur-xl">
               <div className="flex items-center space-x-2">
                 <div className="w-7 h-7 bg-primary-500/20 rounded-lg flex items-center justify-center">
-                  <MessageSquare className="w-4 h-4 text-primary-400" />
+                  <FiMessageSquare size={16} className="text-primary-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                 </div>
                 <span className="text-white font-semibold text-sm md:text-base">Live Transcript</span>
               </div>
@@ -1763,20 +2013,20 @@ export default function CallRoom() {
               <div className="border-t border-dark-800/50 bg-dark-900/50 backdrop-blur-sm">
                 <div className="px-4 py-3 border-b border-dark-800/50 flex items-center justify-between">
                   <div className="flex items-center space-x-2">
-              <Sparkles className="w-4 h-4 text-purple-400" />
+              <FaMagic size={16} className="text-purple-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                     <span className="text-white font-semibold text-sm">AI Insights</span>
                     {aiNotes.lastUpdated && (
                       <span className="text-dark-400 text-xs">
                         Updated {new Date(aiNotes.lastUpdated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </span>
                     )}
+          </div>
             </div>
-                </div>
                 <div className="p-4 space-y-3 max-h-[300px] overflow-y-auto">
                 {aiNotes.summary && (
                   <div className="glass-card rounded-lg p-3 border border-purple-500/20">
                     <h4 className="text-xs font-semibold text-purple-300 mb-2 uppercase tracking-wide flex items-center space-x-1">
-                      <Sparkles className="w-3 h-3" />
+                      <FaMagic size={12} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                       <span>Summary</span>
                     </h4>
                     <p className="text-white text-sm leading-relaxed">{aiNotes.summary}</p>
@@ -1863,7 +2113,7 @@ export default function CallRoom() {
             <div className="sticky top-0 z-10 bg-dark-900/95 backdrop-blur-xl border-b border-dark-800/50 px-4 py-3">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center space-x-2">
-                  <Sparkles className="w-5 h-5 text-purple-400" />
+                  <FaMagic size={20} className="text-purple-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                   <h1 className="text-white font-bold text-lg">
                     {comprehensiveNotes?.title || 'Meeting Notes'}
                   </h1>
@@ -1877,12 +2127,12 @@ export default function CallRoom() {
                     >
                       {notesGenerating ? (
                         <>
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <FiLoader size={14} className="animate-spin" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                           <span>Generating...</span>
                         </>
                       ) : (
                         <>
-                          <Sparkles className="w-3.5 h-3.5" />
+                          <FaMagic size={14} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                           <span>Generate Notes</span>
                         </>
                       )}
@@ -1898,7 +2148,7 @@ export default function CallRoom() {
                         className="p-2 bg-dark-800/50 hover:bg-dark-700/50 rounded-lg transition"
                         title="Export"
                       >
-                        <Download className="w-4 h-4 text-dark-300" />
+                        <FiDownload size={16} className="text-dark-300" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                       </button>
                       <button
                         onClick={() => {
@@ -1908,7 +2158,7 @@ export default function CallRoom() {
                         className="p-2 bg-dark-800/50 hover:bg-dark-700/50 rounded-lg transition"
                         title="Share"
                       >
-                        <Share2 className="w-4 h-4 text-dark-300" />
+                        <FiShare2 size={16} className="text-dark-300" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                       </button>
                     </>
                   )}
@@ -1917,12 +2167,12 @@ export default function CallRoom() {
               {comprehensiveNotes && (
                 <div className="flex items-center space-x-4 text-xs text-dark-400">
                   <span className="flex items-center space-x-1">
-                    <Clock className="w-3.5 h-3.5" />
+                    <FiClock size={14} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                     <span>{new Date(comprehensiveNotes.date).toLocaleDateString()}</span>
                   </span>
                   <span>{Math.round((comprehensiveNotes.duration || 0) / 60)} minutes</span>
                   <span className="flex items-center space-x-1">
-                    <Users className="w-3.5 h-3.5" />
+                    <FiUsers size={14} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                     <span>{comprehensiveNotes.participants?.length || 0} participants</span>
                   </span>
                 </div>
@@ -1933,7 +2183,7 @@ export default function CallRoom() {
             <div className="p-4 space-y-6">
               {notesLoading ? (
                 <div className="text-center py-12">
-                  <Loader2 className="w-8 h-8 animate-spin text-purple-400 mx-auto mb-3" />
+                  <FiLoader size={32} className="animate-spin text-purple-400 mx-auto mb-3" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                   <p className="text-dark-400 text-sm">Loading notes...</p>
                 </div>
               ) : comprehensiveNotes ? (
@@ -1942,7 +2192,7 @@ export default function CallRoom() {
                   {comprehensiveNotes.summary && (
                     <section className="glass-card rounded-lg p-4 border border-purple-500/20">
                       <h2 className="text-white font-semibold text-base mb-3 flex items-center space-x-2">
-                        <Sparkles className="w-4 h-4 text-purple-400" />
+                        <FaMagic size={16} className="text-purple-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                         <span>Summary</span>
                       </h2>
                       <p className="text-white text-sm leading-relaxed">{comprehensiveNotes.summary}</p>
@@ -1953,7 +2203,7 @@ export default function CallRoom() {
                   {comprehensiveNotes.actionItems && comprehensiveNotes.actionItems.length > 0 && (
                     <section className="glass-card rounded-lg p-4 border border-green-500/20">
                       <h2 className="text-white font-semibold text-base mb-3 flex items-center space-x-2">
-                        <CheckCircle className="w-4 h-4 text-green-400" />
+                        <FiCheckCircle size={16} className="text-green-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                         <span>Action Items ({comprehensiveNotes.actionItems.length})</span>
                       </h2>
                       <div className="space-y-3">
@@ -1997,7 +2247,7 @@ export default function CallRoom() {
                   {comprehensiveNotes.decisions && comprehensiveNotes.decisions.length > 0 && (
                     <section className="glass-card rounded-lg p-4 border border-blue-500/20">
                       <h2 className="text-white font-semibold text-base mb-3 flex items-center space-x-2">
-                        <CheckCircle className="w-4 h-4 text-blue-400" />
+                        <FiCheckCircle size={16} className="text-blue-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                         <span>Key Decisions</span>
                       </h2>
                       <div className="space-y-3">
@@ -2018,7 +2268,7 @@ export default function CallRoom() {
                   {comprehensiveNotes.sections && comprehensiveNotes.sections.length > 0 && (
                     <section className="glass-card rounded-lg p-4 border border-yellow-500/20">
                       <h2 className="text-white font-semibold text-base mb-3 flex items-center space-x-2">
-                        <MessageSquare className="w-4 h-4 text-yellow-400" />
+                        <FiMessageSquare size={16} className="text-yellow-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                         <span>Discussion Topics</span>
                       </h2>
                       <div className="space-y-4">
@@ -2043,9 +2293,9 @@ export default function CallRoom() {
                                   <span className="text-dark-400 text-xs">{section.timestamp}</span>
                                 </div>
                                 {isExpanded ? (
-                                  <ChevronUp className="w-4 h-4 text-dark-400" />
+                                  <FiChevronUp size={16} className="text-dark-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                                 ) : (
-                                  <ChevronDown className="w-4 h-4 text-dark-400" />
+                                  <FiChevronDown size={16} className="text-dark-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                                 )}
                               </button>
                               {isExpanded && (
@@ -2122,22 +2372,105 @@ export default function CallRoom() {
                       {comprehensiveNotes.suggestedFollowUp && (
                         <div className="flex items-center justify-between p-3 bg-purple-500/10 rounded-lg border border-purple-500/20">
                           <div className="flex items-center space-x-2">
-                            <Calendar className="w-4 h-4 text-purple-400" />
+                            <FiCalendar size={16} className="text-purple-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                             <p className="text-white text-sm">
                               Suggested follow-up: {new Date(comprehensiveNotes.suggestedFollowUp).toLocaleDateString()}
                             </p>
                           </div>
-                          <button className="px-3 py-1.5 bg-purple-500 hover:bg-purple-600 text-white text-xs rounded-lg transition">
-                            Schedule
+                          <button className="px-3 py-1.5 bg-purple-500 hover:bg-purple-600 text-white text-xs rounded-lg transition flex items-center space-x-1.5">
+                            <FiCalendar size={14} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                            <span>Schedule</span>
                           </button>
                         </div>
+                      )}
+                    </section>
+                  )}
+
+                  {/* Generated Images Gallery */}
+                  {generatedImages.length > 0 && (
+                    <section className="glass-card rounded-lg p-4 border border-purple-500/20">
+                      <h2 className="text-white font-semibold text-base mb-3 flex items-center space-x-2">
+                        <FiImage size={16} className="text-purple-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                        <span>Generated Images ({generatedImages.length})</span>
+                      </h2>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                        {generatedImages.map((img) => (
+                          <div
+                            key={img._id}
+                            className="glass-card-hover rounded-lg overflow-hidden group"
+                          >
+                            <div 
+                              className="relative cursor-pointer"
+                              onClick={() => window.open(img.imageUrl, '_blank')}
+                            >
+                              <img
+                                src={img.imageUrl}
+                                alt={img.prompt}
+                                className="w-full h-32 object-cover"
+                              />
+                              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all flex items-center justify-center opacity-0 group-hover:opacity-100">
+                                <span className="text-white text-xs font-medium">View Full</span>
+                              </div>
+                            </div>
+                            <div className="p-2">
+                              <p className="text-dark-300 text-xs mb-1 line-clamp-2" title={img.prompt}>
+                                "{img.prompt.substring(0, 50)}{img.prompt.length > 50 ? '...' : ''}"
+                              </p>
+                              <div className="flex items-center justify-between text-xs text-dark-500 mb-2">
+                                <span>{new Date(img.createdAt).toLocaleDateString()}</span>
+                                <span className="px-1.5 py-0.5 bg-purple-500/20 text-purple-300 rounded">{img.style}</span>
+                              </div>
+                              <div className="flex items-center space-x-1">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const link = document.createElement('a');
+                                    link.href = img.imageUrl;
+                                    link.download = `image-${img._id}.png`;
+                                    link.click();
+                                    toast.success('Downloaded', 'Image saved');
+                                  }}
+                                  className="flex-1 px-2 py-1 bg-dark-700 hover:bg-dark-600 text-white text-xs rounded transition flex items-center justify-center space-x-1"
+                                  title="Download"
+                                >
+                                  <FiDownload size={10} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                                  <span>Save</span>
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    generateImage(img.prompt);
+                                  }}
+                                  disabled={isGeneratingImage}
+                                  className="flex-1 px-2 py-1 bg-dark-700 hover:bg-dark-600 text-white text-xs rounded transition flex items-center justify-center space-x-1 disabled:opacity-50"
+                                  title="Regenerate"
+                                >
+                                  <FiRefreshCw size={10} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                                  <span>Regen</span>
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      {generatedImages.length > 6 && (
+                        <button
+                          onClick={() => {
+                            // Download all images as ZIP (would need backend support)
+                            toast.info('Download All', 'Feature coming soon');
+                          }}
+                          className="mt-3 w-full px-3 py-2 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 rounded-lg text-purple-300 text-sm transition flex items-center justify-center space-x-2"
+                        >
+                          <FiDownload size={14} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                          <span>Download All Images</span>
+                        </button>
                       )}
                     </section>
                   )}
                 </>
               ) : callStatus === 'ended' ? (
                 <div className="text-center py-12">
-                  <FileText className="w-12 h-12 text-dark-700 mx-auto mb-3" />
+                  <FiFileText size={48} className="text-dark-700 mx-auto mb-3" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                   <p className="text-dark-400 text-sm mb-4">No comprehensive notes available</p>
                   <button
                     onClick={generateComprehensiveNotes}
@@ -2146,12 +2479,12 @@ export default function CallRoom() {
                   >
                     {notesGenerating ? (
                       <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <FiLoader className="w-4 h-4 animate-spin" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                         <span>Generating...</span>
                       </>
                     ) : (
                       <>
-                        <Sparkles className="w-4 h-4" />
+                        <FaMagic size={16} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                         <span>Generate Meeting Notes</span>
                       </>
                     )}
@@ -2409,7 +2742,7 @@ export default function CallRoom() {
             className="bg-primary-500/90 hover:bg-primary-500 rounded-full p-3 shadow-lg hover:scale-110 transition-all animate-pulse flex items-center justify-center relative"
             title={`${unreadPrivateMessages.length} new private message${unreadPrivateMessages.length > 1 ? 's' : ''}`}
           >
-            <MessageSquare className="w-5 h-5 text-white" />
+            <FiMessageSquare size={20} className="text-white" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
             {unreadPrivateMessages.length > 1 && (
               <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center font-bold">
                 {unreadPrivateMessages.length > 9 ? '9+' : unreadPrivateMessages.length}
@@ -2464,10 +2797,23 @@ export default function CallRoom() {
               const isAISpeaking = !!interimTranscript && interimTranscript.trim().length > 0;
               const isAIThinking = !!aiNotes && !isAISpeaking;
               
+              // Responsive grid classes
+              const getGridClasses = () => {
+                if (totalParticipants <= 2) {
+                  return 'grid-cols-1 sm:grid-cols-2';
+                } else if (totalParticipants === 3) {
+                  return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
+                } else if (totalParticipants === 4) {
+                  return 'grid-cols-1 sm:grid-cols-2';
+                } else {
+                  return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
+                }
+              };
+
               return (
-                <div className="w-full h-full grid gap-2 p-2 relative" style={{
-                  gridTemplateColumns: gridCols,
-                  gridTemplateRows: gridRows,
+                <div className={`w-full h-full grid gap-2 sm:gap-3 p-2 sm:p-3 relative ${getGridClasses()}`} style={{
+                  gridTemplateColumns: window.innerWidth < 640 ? '1fr' : (window.innerWidth < 1024 && totalParticipants > 2 ? 'repeat(2, 1fr)' : gridCols),
+                  gridTemplateRows: window.innerWidth < 640 ? 'repeat(auto-fit, minmax(160px, 1fr))' : gridRows,
                 }}>
                   {/* Remote participants */}
                   {participants.map((participant) => {
@@ -2480,7 +2826,7 @@ export default function CallRoom() {
                         userId={participant.userId}
                         isVideoOff={participantData?.isVideoOff || false}
                         isMuted={participantData?.isMuted || false}
-                        className="min-h-0"
+                        className="min-h-[160px] sm:min-h-0"
                       />
                     );
                   })}
@@ -2494,19 +2840,19 @@ export default function CallRoom() {
                     isVideoOff={isVideoOff}
                     isMuted={isMuted}
                     isLocal={true}
-                    className="min-h-0"
+                    className="min-h-[160px] sm:min-h-0"
                   />
                   
                   {/* AI Participant (ALWAYS shown as third participant) */}
                   <AIParticipant
                     isSpeaking={isAISpeaking}
                     isThinking={isAIThinking}
-                    className="min-h-0"
+                    className="min-h-[160px] sm:min-h-0"
                   />
                   
                   {/* Waiting message overlay (only when alone with AI) - Moved up significantly to avoid button overlap */}
                   {participants.length === 0 && (
-                    <div className="absolute bottom-32 md:bottom-36 left-1/2 transform -translate-x-1/2 bg-dark-900/90 backdrop-blur-lg rounded-full px-4 py-2.5 md:px-6 md:py-3 z-20 max-w-[90%] md:max-w-none">
+                    <div className="absolute bottom-24 sm:bottom-32 md:bottom-36 left-1/2 transform -translate-x-1/2 bg-dark-900/90 backdrop-blur-lg rounded-full px-4 py-2.5 md:px-6 md:py-3 z-20 max-w-[90%] md:max-w-none">
                       <p className="text-white text-sm md:text-base font-medium whitespace-nowrap">Waiting for others to join...</p>
                       {roomId && (
                         <p className="text-dark-400 text-xs md:text-sm mt-1 text-center truncate">Room: <span className="text-primary-400 font-mono">{roomId}</span></p>
@@ -2517,15 +2863,74 @@ export default function CallRoom() {
               );
             })()}
 
+            {/* Mobile Bottom Tab Navigation */}
+            <div className="mobile-bottom-nav safe-area-bottom">
+              {(['dreamweaving', 'chat', 'transcript', 'notes'] as RightTab[]).map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => {
+                    setActiveRightTab(tab);
+                    setShowBottomSheet(true);
+                  }}
+                  className={`flex flex-col items-center justify-center gap-1 min-w-[64px] min-h-[48px] transition-all ${
+                    activeRightTab === tab
+                      ? 'text-primary-400'
+                      : 'text-dark-400'
+                  }`}
+                >
+                  {tab === 'dreamweaving' && (
+                    <FaMagic size={20} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                  )}
+                  {tab === 'chat' && (
+                    <div className="relative">
+                      <FiMessageSquare size={20} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                      {(unreadPrivateMessages.length > 0 || showPrivateChatOverlay) && (
+                        <span className="absolute -top-1 -right-1 w-2 h-2 bg-primary-500 rounded-full animate-pulse" />
+                      )}
+                    </div>
+                  )}
+                  {tab === 'transcript' && (
+                    <FiFileText size={20} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                  )}
+                  {tab === 'notes' && (
+                    <FiFileText size={20} style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                  )}
+                  <span className="text-xs font-medium capitalize">{tab === 'dreamweaving' ? 'Dream' : tab}</span>
+                </button>
+              ))}
+            </div>
+
             {/* Top Left Info - Auto-hide */}
             <div className={`absolute top-4 left-4 z-30 transition-opacity duration-300 ${showMobileControls ? 'opacity-100' : 'opacity-0'}`}>
               <div className="glass-card rounded-lg px-3 py-2 space-y-1">
                 <div className="flex items-center space-x-2">
-                  <Clock className="w-4 h-4 text-white" />
+                  <FiClock 
+                    size={16}
+                    className="text-white flex-shrink-0" 
+                    style={{ 
+                      display: 'inline-block', 
+                      width: '16px', 
+                      height: '16px', 
+                      color: '#ffffff', 
+                      opacity: 1,
+                      visibility: 'visible'
+                    }} 
+                  />
                   <span className="text-white font-mono text-sm">{formatDuration(callDuration)}</span>
             </div>
                 <div className="flex items-center space-x-2">
-                  <Users className="w-4 h-4 text-white" />
+                  <FiUsers 
+                    size={16}
+                    className="text-white flex-shrink-0" 
+                    style={{ 
+                      display: 'inline-block', 
+                      width: '16px', 
+                      height: '16px', 
+                      color: '#ffffff', 
+                      opacity: 1,
+                      visibility: 'visible'
+                    }} 
+                  />
                   <span className="text-white text-sm">{participants.length + 1}</span>
         </div>
                 {isRecording && (
@@ -2535,24 +2940,7 @@ export default function CallRoom() {
           </div>
                 )}
         </div>
-      </div>
-
-            {/* Floating Call Controls - Mobile View - Only show in Dream tab (call view) AND when call is active/waiting */}
-            {activeRightTab === 'dreamweaving' && (callStatus === 'active' || callStatus === 'waiting') && (
-              <div className={`fixed left-1/2 transform -translate-x-1/2 z-[60] bottom-8`}>
-              <CallControls
-                isMuted={isMuted}
-                isVideoOff={isVideoOff}
-                onToggleMute={toggleMute}
-                onToggleVideo={toggleVideo}
-                onEndCall={handleEndCall}
-                onScreenShare={handleScreenShare}
-                onAddParticipant={handleAddParticipant}
-                onSettings={handleSettings}
-                isScreenSharing={isScreenSharing}
-              />
             </div>
-            )}
             </div>
 
           {/* Swipeable Top Tabs Bar - Fixed at top */}
@@ -2572,17 +2960,63 @@ export default function CallRoom() {
                   }`}
                 >
                   <div className="flex items-center justify-center space-x-1.5">
-                    {tab === 'dreamweaving' && <Wand2 className="w-4 h-4" />}
+                    {tab === 'dreamweaving' && (
+                      <FaMagic 
+                        size={16}
+                        className="flex-shrink-0" 
+                        style={{ 
+                          display: 'inline-block', 
+                          width: '16px', 
+                          height: '16px', 
+                          opacity: 1,
+                          visibility: 'visible'
+                        }} 
+                      />
+                    )}
                     {tab === 'chat' && (
                       <div className="relative">
-                        <MessageSquare className="w-4 h-4" />
+                        <FiMessageSquare 
+                          size={16}
+                          className="flex-shrink-0" 
+                          style={{ 
+                            display: 'inline-block', 
+                            width: '16px', 
+                            height: '16px', 
+                            opacity: 1,
+                            visibility: 'visible'
+                          }} 
+                        />
                         {(unreadPrivateMessages.length > 0 || showPrivateChatOverlay) && (
                           <span className="absolute -top-1 -right-1 w-2 h-2 bg-primary-500 rounded-full animate-pulse" />
                         )}
                       </div>
                     )}
-                    {tab === 'transcript' && <FileText className="w-4 h-4" />}
-                    {tab === 'notes' && <StickyNote className="w-4 h-4" />}
+                    {tab === 'transcript' && (
+                      <FiFileText 
+                        size={16}
+                        className="flex-shrink-0" 
+                        style={{ 
+                          display: 'inline-block', 
+                          width: '16px', 
+                          height: '16px', 
+                          opacity: 1,
+                          visibility: 'visible'
+                        }} 
+                      />
+                    )}
+                    {tab === 'notes' && (
+                      <FaStickyNote 
+                        size={16}
+                        className="flex-shrink-0" 
+                        style={{ 
+                          display: 'inline-block', 
+                          width: '16px', 
+                          height: '16px', 
+                          opacity: 1,
+                          visibility: 'visible'
+                        }} 
+                      />
+                    )}
                     <span className="capitalize">{tab === 'dreamweaving' ? 'Dream' : tab === 'transcript' ? 'Transcript' : tab}</span>
                   </div>
                 </button>
@@ -2622,7 +3056,7 @@ export default function CallRoom() {
               >
                 <div className="flex items-center space-x-3 flex-1 min-w-0">
                   <div className="w-12 h-12 bg-primary-500/40 rounded-full flex items-center justify-center flex-shrink-0 animate-pulse ring-2 ring-primary-500/50">
-                    <MessageSquare className="w-6 h-6 text-primary-200" />
+                    <FiMessageSquare size={24} className="text-primary-200" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-white font-bold text-base truncate">
@@ -2642,7 +3076,7 @@ export default function CallRoom() {
                   className="ml-3 p-2 hover:bg-dark-800/70 rounded-lg transition flex-shrink-0"
                   aria-label="Dismiss notification"
                 >
-                  <X className="w-5 h-5 text-dark-300 hover:text-white" />
+                  <FiX size={20} className="text-dark-300 hover:text-white" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                 </button>
               </div>
             </div>
@@ -2666,7 +3100,7 @@ export default function CallRoom() {
                     onClick={() => setShowBottomSheet(false)}
                     className="p-2 glass-card rounded-lg hover:bg-dark-800/50"
                   >
-                    <X className="w-5 h-5 text-white" />
+                    <FiX size={20} className="text-white" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                   </button>
                 </div>
                 <div className="flex-1 overflow-y-auto">
@@ -2689,11 +3123,33 @@ export default function CallRoom() {
     </div>
               )}
               <div className="flex items-center space-x-2">
-                <Clock className="w-4 h-4 text-dark-400" />
+                <FiClock 
+                  size={16}
+                  className="text-dark-400" 
+                  style={{ 
+                    display: 'inline-block', 
+                    width: '16px', 
+                    height: '16px', 
+                    color: '#94a3b8', 
+                    opacity: 1,
+                    visibility: 'visible'
+                  }} 
+                />
                 <span className="text-white font-mono text-lg">{formatDuration(callDuration)}</span>
               </div>
               <div className="flex items-center space-x-2 bg-dark-800/50 px-3 py-1.5 rounded-lg">
-                <Users className="w-4 h-4 text-dark-400" />
+                <FiUsers 
+                  size={16}
+                  className="text-dark-400" 
+                  style={{ 
+                    display: 'inline-block', 
+                    width: '16px', 
+                    height: '16px', 
+                    color: '#94a3b8', 
+                    opacity: 1,
+                    visibility: 'visible'
+                  }} 
+                />
                 <span className="text-white text-sm">{participants.length + 1}</span>
               </div>
             </div>
@@ -2704,9 +3160,9 @@ export default function CallRoom() {
                 className="glass-card-hover px-4 py-2 rounded-lg flex items-center space-x-2"
               >
                 {copied ? (
-                  <Check className="w-4 h-4 text-green-400" />
+                  <FiCheck size={16} className="text-green-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                 ) : (
-                  <Copy className="w-4 h-4 text-dark-400" />
+                  <FiCopy size={16} className="text-dark-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                 )}
                 <span className="text-white font-mono text-sm">{roomId}</span>
               </button>
@@ -2759,10 +3215,23 @@ export default function CallRoom() {
               const isAISpeaking = !!interimTranscript && interimTranscript.trim().length > 0;
               const isAIThinking = !!aiNotes && !isAISpeaking;
               
+              // Responsive grid classes
+              const getGridClasses = () => {
+                if (totalParticipants <= 2) {
+                  return 'grid-cols-1 sm:grid-cols-2';
+                } else if (totalParticipants === 3) {
+                  return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
+                } else if (totalParticipants === 4) {
+                  return 'grid-cols-1 sm:grid-cols-2';
+                } else {
+                  return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
+                }
+              };
+
               return (
-                <div className="w-full h-full grid gap-2 p-2 relative" style={{
-                  gridTemplateColumns: gridCols,
-                  gridTemplateRows: gridRows,
+                <div className={`w-full h-full grid gap-2 sm:gap-3 p-2 sm:p-3 relative ${getGridClasses()}`} style={{
+                  gridTemplateColumns: window.innerWidth < 640 ? '1fr' : (window.innerWidth < 1024 && totalParticipants > 2 ? 'repeat(2, 1fr)' : gridCols),
+                  gridTemplateRows: window.innerWidth < 640 ? 'repeat(auto-fit, minmax(160px, 1fr))' : gridRows,
                 }}>
                   {/* Remote participants */}
                   {participants.map((participant) => {
@@ -2775,7 +3244,7 @@ export default function CallRoom() {
                         userId={participant.userId}
                         isVideoOff={participantData?.isVideoOff || false}
                         isMuted={participantData?.isMuted || false}
-                        className="min-h-0"
+                        className="min-h-[160px] sm:min-h-0"
                       />
                     );
                   })}
@@ -2789,19 +3258,19 @@ export default function CallRoom() {
                     isVideoOff={isVideoOff}
                     isMuted={isMuted}
                     isLocal={true}
-                    className="min-h-0"
+                    className="min-h-[160px] sm:min-h-0"
                   />
                   
                   {/* AI Participant (ALWAYS shown as third participant) */}
                   <AIParticipant
                     isSpeaking={isAISpeaking}
                     isThinking={isAIThinking}
-                    className="min-h-0"
+                    className="min-h-[160px] sm:min-h-0"
                   />
                   
                   {/* Waiting message overlay (only when alone with AI) - Moved up significantly to avoid button overlap */}
                   {participants.length === 0 && (
-                    <div className="absolute bottom-32 md:bottom-36 left-1/2 transform -translate-x-1/2 bg-dark-900/90 backdrop-blur-lg rounded-full px-4 py-2.5 md:px-6 md:py-3 z-20 max-w-[90%] md:max-w-none">
+                    <div className="absolute bottom-24 sm:bottom-32 md:bottom-36 left-1/2 transform -translate-x-1/2 bg-dark-900/90 backdrop-blur-lg rounded-full px-4 py-2.5 md:px-6 md:py-3 z-20 max-w-[90%] md:max-w-none">
                       <p className="text-white text-sm md:text-base font-medium whitespace-nowrap">Waiting for others to join...</p>
                       {roomId && (
                         <p className="text-dark-400 text-xs md:text-sm mt-1 text-center truncate">Room: <span className="text-primary-400 font-mono">{roomId}</span></p>
@@ -2812,25 +3281,6 @@ export default function CallRoom() {
               );
             })()}
 
-            {/* Call Controls - Enhanced with animations and proper spacing - Only show in Dream tab (call view) AND when call is active/waiting */}
-            {activeRightTab === 'dreamweaving' && (callStatus === 'active' || callStatus === 'waiting') && (
-              <div className={`z-[60] ${
-                isMobile ? 'fixed bottom-8 left-1/2 transform -translate-x-1/2' : 
-                'absolute bottom-8 left-1/2 transform -translate-x-1/2'
-            }`}>
-              <CallControls
-                isMuted={isMuted}
-                isVideoOff={isVideoOff}
-                onToggleMute={toggleMute}
-                onToggleVideo={toggleVideo}
-                onEndCall={handleEndCall}
-                onScreenShare={handleScreenShare}
-                onAddParticipant={handleAddParticipant}
-                onSettings={handleSettings}
-                isScreenSharing={isScreenSharing}
-              />
-            </div>
-            )}
           </div>
         </div>
 
@@ -2859,17 +3309,63 @@ export default function CallRoom() {
                     }`}
                   >
                     <div className="flex items-center justify-center space-x-1.5">
-                      {tab === 'dreamweaving' && <Wand2 className="w-4 h-4" />}
+                      {tab === 'dreamweaving' && (
+                      <FaMagic 
+                        size={16}
+                        className="flex-shrink-0" 
+                        style={{ 
+                          display: 'inline-block', 
+                          width: '16px', 
+                          height: '16px', 
+                          opacity: 1,
+                          visibility: 'visible'
+                        }} 
+                      />
+                      )}
                       {tab === 'chat' && (
                         <div className="relative">
-                          <MessageSquare className="w-4 h-4" />
+                          <FiMessageSquare 
+                            size={16}
+                            className="flex-shrink-0" 
+                            style={{ 
+                              display: 'inline-block', 
+                              width: '16px', 
+                              height: '16px', 
+                              opacity: 1,
+                              visibility: 'visible'
+                            }} 
+                          />
                           {unreadPrivateMessages.length > 0 && (
                             <span className="absolute -top-1 -right-1 w-2 h-2 bg-primary-500 rounded-full animate-pulse" />
                           )}
                         </div>
                       )}
-                      {tab === 'transcript' && <FileText className="w-4 h-4" />}
-                      {tab === 'notes' && <StickyNote className="w-4 h-4" />}
+                      {tab === 'transcript' && (
+                        <FiFileText 
+                          size={16}
+                          className="flex-shrink-0" 
+                          style={{ 
+                            display: 'inline-block', 
+                            width: '16px', 
+                            height: '16px', 
+                            opacity: 1,
+                            visibility: 'visible'
+                          }} 
+                        />
+                      )}
+                      {tab === 'notes' && (
+                        <FaStickyNote 
+                          size={16}
+                          className="flex-shrink-0" 
+                          style={{ 
+                            display: 'inline-block', 
+                            width: '16px', 
+                            height: '16px', 
+                            opacity: 1,
+                            visibility: 'visible'
+                          }} 
+                        />
+                      )}
                       <span className="hidden sm:inline capitalize">
                         {tab === 'dreamweaving' ? 'Dream' : tab === 'transcript' ? 'Transcript' : tab}
                       </span>
@@ -2908,7 +3404,7 @@ export default function CallRoom() {
                   >
                     <div className="flex items-center space-x-3 flex-1 min-w-0">
                       <div className="w-12 h-12 bg-primary-500/40 rounded-full flex items-center justify-center flex-shrink-0 animate-pulse ring-2 ring-primary-500/50">
-                        <MessageSquare className="w-6 h-6 text-primary-200" />
+                        <FiMessageSquare size={24} className="text-primary-200" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-white font-bold text-base truncate">
@@ -2928,7 +3424,7 @@ export default function CallRoom() {
                       className="ml-3 p-2 hover:bg-dark-800/70 rounded-lg transition flex-shrink-0"
                       aria-label="Dismiss notification"
                     >
-                      <X className="w-5 h-5 text-dark-300 hover:text-white" />
+                      <FiX size={20} className="text-dark-300 hover:text-white" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                     </button>
                   </div>
                 </div>
@@ -2965,7 +3461,7 @@ export default function CallRoom() {
               onClick={handleReplyInPrivate}
               className="w-full px-4 py-3 flex items-center space-x-3 hover:bg-dark-700/50 transition text-left"
             >
-              <Reply className="w-4 h-4 text-primary-400" />
+              <FiCornerUpLeft size={16} className="text-primary-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
               <span className="text-white text-sm">Reply in private</span>
             </button>
           </div>
@@ -2995,7 +3491,7 @@ export default function CallRoom() {
                 onClick={() => handleReplyPrivately(message)}
                 className="w-full px-4 py-3 flex items-center space-x-3 hover:bg-dark-700/50 transition text-left"
               >
-                <Reply className="w-4 h-4 text-primary-400" />
+                <FiCornerUpLeft size={16} className="text-primary-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                 <span className="text-white text-sm">Reply in Private</span>
               </button>
               <button
@@ -3006,7 +3502,7 @@ export default function CallRoom() {
                 }}
                 className="w-full px-4 py-3 flex items-center space-x-3 hover:bg-dark-700/50 transition text-left"
               >
-                <AtSign className="w-4 h-4 text-blue-400" />
+                <FiAtSign size={16} className="text-blue-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                 <span className="text-white text-sm">Mention</span>
               </button>
               <button
@@ -3017,7 +3513,7 @@ export default function CallRoom() {
                 }}
                 className="w-full px-4 py-3 flex items-center space-x-3 hover:bg-dark-700/50 transition text-left"
               >
-                <Copy className="w-4 h-4 text-dark-400" />
+                <FiCopy size={16} className="text-dark-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                 <span className="text-white text-sm">Copy</span>
               </button>
               <button
@@ -3027,7 +3523,7 @@ export default function CallRoom() {
                 }}
                 className="w-full px-4 py-3 flex items-center space-x-3 hover:bg-dark-700/50 transition text-left"
               >
-                <Forward className="w-4 h-4 text-dark-400" />
+                <FiCornerUpRight size={16} className="text-dark-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
                 <span className="text-white text-sm">Forward</span>
               </button>
             </div>
@@ -3052,7 +3548,7 @@ export default function CallRoom() {
       {/* Message Indicator Badge - Shows when private chat is active */}
       {showPrivateChatOverlay && (
         <div className="fixed top-16 right-4 z-[90] bg-primary-500 rounded-full p-2 shadow-lg animate-pulse">
-          <MessageSquare className="w-4 h-4 text-white" />
+          <FiMessageSquare size={16} className="text-white" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
         </div>
       )}
 
@@ -3063,6 +3559,41 @@ export default function CallRoom() {
         onToggle={() => setShowAINotesSidebar(!showAINotesSidebar)}
         callTitle={`Call ${roomId ? `- ${roomId.substring(0, 8)}` : ''}`}
       />
+
+      {/* Global Call Controls - Fixed at bottom, visible on ALL tabs during active calls - OUTSIDE all overflow containers */}
+      {/* Show controls when:
+          1. We have a roomId (in a call room)
+          2. Call status is 'active' or 'waiting' (call is in progress)
+          3. Controls appear on ALL tabs (Dream, Chat, Transcript, Notes) when call is active
+      */}
+      {roomId && 
+       (callStatus === 'active' || callStatus === 'waiting') && (
+        <div 
+          className="fixed left-1/2 transform -translate-x-1/2 z-[9999] bottom-8" 
+          style={{ 
+            pointerEvents: 'auto', 
+            display: 'flex', 
+            visibility: 'visible', 
+            opacity: 1,
+            position: 'fixed',
+            zIndex: 9999,
+            width: 'auto',
+            height: 'auto'
+          }}
+        >
+          <CallControls
+            isMuted={isMuted}
+            isVideoOff={isVideoOff}
+            onToggleMute={toggleMute}
+            onToggleVideo={toggleVideo}
+            onEndCall={handleEndCall}
+            onScreenShare={handleScreenShare}
+            onAddParticipant={handleAddParticipant}
+            onSettings={handleSettings}
+            isScreenSharing={isScreenSharing}
+          />
+        </div>
+      )}
 
     </div>
   );

@@ -11,6 +11,7 @@ import {
   Paperclip,
   Loader2,
   Check,
+  FileText,
 } from 'lucide-react';
 import { useAuthStore } from '../store/auth';
 import { useCallStore } from '../store/call';
@@ -93,6 +94,7 @@ export default function FriendChat() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [calls, setCalls] = useState<any[]>([]);
 
   // Get return path from location state (for returning to call)
   const returnPath = location.state?.returnPath || '/friends';
@@ -112,6 +114,33 @@ export default function FriendChat() {
       minimizeCall();
     }
   }, [fromCall, callRoomId, roomId, callStatus, isMinimized, minimizeCall]);
+
+  // Fetch calls for this conversation (one-on-one only)
+  useEffect(() => {
+    if (!accessToken || !conversationIdRef.current) return;
+    
+    const fetchCalls = async () => {
+      try {
+        const response = await fetch(`${API_URL}/api/users/history`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` },
+        });
+        if (response.ok) {
+          const data = await response.json();
+          // Filter to only show calls with this conversation ID
+          const conversationCalls = (data.calls || []).filter((call: any) => {
+            const callConvId = call.conversationId?.toString();
+            const currentConvId = conversationIdRef.current?.toString();
+            return callConvId && currentConvId && callConvId === currentConvId;
+          });
+          setCalls(conversationCalls);
+        }
+      } catch (error) {
+        console.error('Fetch calls error:', error);
+      }
+    };
+
+    fetchCalls();
+  }, [accessToken, conversationIdRef.current]);
 
   // Auto-scroll to bottom
   const scrollToBottom = useCallback(() => {
@@ -715,6 +744,71 @@ export default function FriendChat() {
       {/* Messages area - WhatsApp style */}
       <div className="flex-1 overflow-y-auto bg-dark-950 bg-[url('data:image/svg+xml,%3Csvg%20width=%22100%22%20height=%22100%22%20xmlns=%22http://www.w3.org/2000/svg%22%3E%3Cdefs%3E%3Cpattern%20id=%22grid%22%20width=%22100%22%20height=%22100%22%20patternUnits=%22userSpaceOnUse%22%3E%3Cpath%20d=%22M%20100%200%20L%200%200%200%20100%22%20fill=%22none%22%20stroke=%22%231a1a2e%22%20stroke-width=%221%22/%3E%3C/pattern%3E%3C/defs%3E%3Crect%20width=%22100%22%20height=%22100%22%20fill=%22url(%23grid)%22/%3E%3C/svg%3E')] bg-opacity-30">
         <div className="px-4 py-6 space-y-3">
+          {/* Call History Section - Only for one-on-one conversations */}
+          {calls.length > 0 && (
+            <div className="mb-4 pb-4 border-b border-dark-800/50">
+              <h3 className="text-white font-semibold text-sm mb-3 flex items-center space-x-2">
+                <Video className="w-4 h-4 text-primary-400" />
+                <span>Call History ({calls.length})</span>
+              </h3>
+              <div className="space-y-2">
+                {calls.map((call) => {
+                  const formatDate = (dateString: string) => {
+                    const date = new Date(dateString);
+                    const now = new Date();
+                    const diffHours = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60));
+                    if (diffHours < 1) return 'Just now';
+                    if (diffHours < 24) return `${diffHours}h ago`;
+                    if (diffHours < 48) return 'Yesterday';
+                    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                  };
+                  const formatDuration = (seconds: number) => {
+                    if (!seconds) return '0:00';
+                    const mins = Math.floor(seconds / 60);
+                    const secs = seconds % 60;
+                    return `${mins}:${secs.toString().padStart(2, '0')}`;
+                  };
+                  
+                  return (
+                    <div
+                      key={call._id}
+                      className="glass-card rounded-lg p-3 border border-dark-800/50 hover:border-primary-500/50 transition"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center space-x-2 mb-1">
+                            <Video className="w-4 h-4 text-primary-400" />
+                            <span className="text-white text-sm font-medium">
+                              {formatDate(call.startedAt)}
+                            </span>
+                            <span className="text-dark-500">•</span>
+                            <span className="text-dark-400 text-xs">
+                              {formatDuration(call.duration)}
+                            </span>
+                          </div>
+                          {call.notesId?.summary && (
+                            <p className="text-dark-300 text-xs line-clamp-1">
+                              {call.notesId.summary}
+                            </p>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => {
+                            window.location.href = `/call/${call._id}/summary`;
+                          }}
+                          className="ml-3 px-3 py-1.5 bg-primary-500/20 hover:bg-primary-500/30 text-primary-400 rounded-lg transition text-xs flex items-center space-x-1"
+                          title="View call summary"
+                        >
+                          <FileText className="w-3 h-3" />
+                          <span>Summary</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           {messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16">
               <div className="w-20 h-20 bg-gradient-to-br from-primary-500/20 to-purple-500/20 rounded-full flex items-center justify-center mb-4">

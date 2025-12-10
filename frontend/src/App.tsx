@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/auth';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -10,27 +10,32 @@ import { useNotifications } from './hooks/useNotifications';
 import NotificationBell from './components/NotificationBell';
 import Onboarding from './components/Onboarding';
 import MobileNavigation from './components/MobileNavigation';
-import LandingPage from './pages/LandingPage';
-import Login from './pages/Login';
-import Register from './pages/Register';
-import ForgotPassword from './pages/ForgotPassword';
-import Home from './pages/Home';
-import CallRoom from './pages/CallRoom';
-import PrivateCall from './pages/PrivateCall';
-import FaceTimeCallInterface from './components/FaceTimeCallInterface';
-import History from './pages/History';
-import CallHistory from './pages/CallHistory';
-import CallDetail from './pages/CallDetail';
-import Messages from './pages/Messages';
-import Network from './pages/Network';
-import PrivateMessages from './pages/PrivateMessages';
-import FriendsEnhanced from './pages/FriendsEnhanced';
-import FriendChat from './pages/FriendChat';
-import Contacts from './pages/Contacts';
-import ContactChat from './pages/ContactChat';
-import AIChat from './pages/AIChat';
-import Profile from './pages/Profile';
-import Settings from './pages/Settings';
+import LoadingSpinner from './components/LoadingSpinner';
+
+// Lazy load pages for code splitting
+const LandingPage = lazy(() => import('./pages/LandingPage'));
+const Login = lazy(() => import('./pages/Login'));
+const Register = lazy(() => import('./pages/Register'));
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword'));
+const Home = lazy(() => import('./pages/Home'));
+const CallRoom = lazy(() => import('./pages/CallRoom'));
+const PrivateCall = lazy(() => import('./pages/PrivateCall'));
+const FaceTimeCallInterface = lazy(() => import('./components/FaceTimeCallInterface'));
+const History = lazy(() => import('./pages/History'));
+const CallHistory = lazy(() => import('./pages/CallHistory'));
+const CallHistoryEnhanced = lazy(() => import('./pages/CallHistoryEnhanced'));
+const CallDetail = lazy(() => import('./pages/CallDetail'));
+const CallSummary = lazy(() => import('./pages/CallSummary'));
+const Messages = lazy(() => import('./pages/Messages'));
+const Network = lazy(() => import('./pages/Network'));
+const PrivateMessages = lazy(() => import('./pages/PrivateMessages'));
+const FriendsEnhanced = lazy(() => import('./pages/FriendsEnhanced'));
+const FriendChat = lazy(() => import('./pages/FriendChat'));
+const Contacts = lazy(() => import('./pages/Contacts'));
+const ContactChat = lazy(() => import('./pages/ContactChat'));
+const AIChat = lazy(() => import('./pages/AIChat'));
+const Profile = lazy(() => import('./pages/Profile'));
+const Settings = lazy(() => import('./pages/Settings'));
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuthStore();
@@ -67,7 +72,8 @@ function App() {
       <FloatingCallOverlay />
       <GlobalCallHandler />
       <MobileNavigation />
-      <Routes>
+      <Suspense fallback={<LoadingSpinner fullScreen text="Loading..." />}>
+        <Routes>
         <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
@@ -114,7 +120,7 @@ function App() {
           path="/history"
           element={
             <ProtectedRoute>
-              <CallHistory />
+              <CallHistoryEnhanced />
             </ProtectedRoute>
           }
         />
@@ -139,6 +145,14 @@ function App() {
           element={
             <ProtectedRoute>
               <CallDetail />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/call/:callId/summary"
+          element={
+            <ProtectedRoute>
+              <CallSummary />
             </ProtectedRoute>
           }
         />
@@ -238,7 +252,8 @@ function App() {
             </ProtectedRoute>
           }
         />
-      </Routes>
+        </Routes>
+      </Suspense>
     </ErrorBoundary>
   );
 }

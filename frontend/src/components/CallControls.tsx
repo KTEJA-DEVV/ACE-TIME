@@ -1,17 +1,17 @@
 import { useState, useRef, useEffect } from 'react';
-import {
-  Mic,
-  MicOff,
-  Video,
-  VideoOff,
-  PhoneOff,
-  Monitor,
-  MonitorOff,
-  UserPlus,
-  Settings,
-  AlertTriangle,
-  X,
-} from 'lucide-react';
+import { 
+  FiMic, 
+  FiMicOff, 
+  FiVideo, 
+  FiVideoOff, 
+  FiMonitor,
+  FiUserPlus, 
+  FiSettings, 
+  FiMoreVertical,
+  FiAlertTriangle, 
+  FiX 
+} from 'react-icons/fi';
+import { MdCallEnd, MdDesktopMac } from 'react-icons/md';
 
 interface CallControlsProps {
   isMuted: boolean;
@@ -73,8 +73,21 @@ export default function CallControls({
     <>
       {/* Call Controls Container with backdrop blur - Fixed z-index and no text overlap */}
       <div
-        className={`flex items-center justify-center gap-6 z-[60] backdrop-blur-xl bg-dark-900/70 rounded-full px-6 py-4 border border-white/10 shadow-2xl ${className}`}
-        style={{ isolation: 'isolate', position: 'relative' }}
+        className={`flex items-center justify-center gap-4 sm:gap-5 md:gap-6 backdrop-blur-xl bg-dark-900/70 rounded-full px-4 sm:px-6 py-3 sm:py-4 border border-white/10 shadow-2xl ${className}`}
+        style={{ 
+          isolation: 'isolate', 
+          position: 'fixed',
+          bottom: 'calc(env(safe-area-inset-bottom) + 1.5rem)',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          display: 'flex',
+          visibility: 'visible',
+          opacity: 1,
+          zIndex: 9999,
+          width: 'auto',
+          height: 'auto',
+          paddingBottom: 'calc(env(safe-area-inset-bottom) + 0.75rem)',
+        }}
       >
         {/* Mute/Unmute Button - Fixed size 56px */}
         <button
@@ -91,7 +104,7 @@ export default function CallControls({
             }
             group overflow-hidden
           `}
-          style={{ width: '56px', height: '56px', minWidth: '56px', minHeight: '56px' }}
+          style={{ width: 'clamp(48px, 14vw, 56px)', height: 'clamp(48px, 14vw, 56px)', minWidth: '48px', minHeight: '48px' }}
           title={isMuted ? 'Unmute' : 'Mute'}
         >
           {/* Animated background gradient when muted */}
@@ -110,11 +123,33 @@ export default function CallControls({
             isMuted 
               ? 'group-hover:scale-110 group-hover:rotate-12' 
               : 'group-hover:scale-110'
-          }`}>
+          }`} style={{ width: '24px', height: '24px' }}>
             {isMuted ? (
-              <MicOff className="w-6 h-6 text-white drop-shadow-lg" strokeWidth={2.5} fill="none" stroke="currentColor" style={{ display: 'block', flexShrink: 0, pointerEvents: 'none' }} />
+              <FiMicOff 
+                size={24} 
+                className="text-white" 
+                style={{ 
+                  display: 'inline-block', 
+                  width: '24px', 
+                  height: '24px', 
+                  color: '#ffffff', 
+                  opacity: 1,
+                  visibility: 'visible'
+                }} 
+              />
             ) : (
-              <Mic className="w-6 h-6 text-white drop-shadow-lg" strokeWidth={2.5} fill="none" stroke="currentColor" style={{ display: 'block', flexShrink: 0, pointerEvents: 'none' }} />
+              <FiMic 
+                size={24} 
+                className="text-white" 
+                style={{ 
+                  display: 'inline-block', 
+                  width: '24px', 
+                  height: '24px', 
+                  color: '#ffffff', 
+                  opacity: 1,
+                  visibility: 'visible'
+                }} 
+              />
             )}
           </div>
 
@@ -140,7 +175,7 @@ export default function CallControls({
             }
             group overflow-hidden
           `}
-          style={{ width: '56px', height: '56px', minWidth: '56px', minHeight: '56px' }}
+          style={{ width: 'clamp(48px, 14vw, 56px)', height: 'clamp(48px, 14vw, 56px)', minWidth: '48px', minHeight: '48px' }}
           title={isVideoOff ? 'Turn on video' : 'Turn off video'}
         >
           {/* Animated background when video is off */}
@@ -159,11 +194,33 @@ export default function CallControls({
             isVideoOff 
               ? 'group-hover:scale-110 group-hover:rotate-12' 
               : 'group-hover:scale-110'
-          }`}>
+          }`} style={{ width: '24px', height: '24px' }}>
             {isVideoOff ? (
-              <VideoOff className="w-6 h-6 text-white drop-shadow-lg" strokeWidth={2.5} fill="none" stroke="currentColor" style={{ display: 'block', flexShrink: 0, pointerEvents: 'none' }} />
+              <FiVideoOff 
+                size={24} 
+                className="text-white" 
+                style={{ 
+                  display: 'inline-block', 
+                  width: '24px', 
+                  height: '24px', 
+                  color: '#ffffff', 
+                  opacity: 1,
+                  visibility: 'visible'
+                }} 
+              />
             ) : (
-              <Video className="w-6 h-6 text-white drop-shadow-lg" strokeWidth={2.5} fill="none" stroke="currentColor" style={{ display: 'block', flexShrink: 0, pointerEvents: 'none' }} />
+              <FiVideo 
+                size={24} 
+                className="text-white" 
+                style={{ 
+                  display: 'inline-block', 
+                  width: '24px', 
+                  height: '24px', 
+                  color: '#ffffff', 
+                  opacity: 1,
+                  visibility: 'visible'
+                }} 
+              />
             )}
           </div>
 
@@ -190,7 +247,7 @@ export default function CallControls({
               }
               group overflow-hidden
             `}
-            style={{ width: '56px', height: '56px', minWidth: '56px', minHeight: '56px' }}
+            style={{ width: 'clamp(48px, 14vw, 56px)', height: 'clamp(48px, 14vw, 56px)', minWidth: '48px', minHeight: '48px' }}
             title={isScreenSharing ? 'Stop sharing' : 'Share screen'}
           >
             {/* Active state glow */}
@@ -201,11 +258,33 @@ export default function CallControls({
             {/* Glass morphism overlay */}
             <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-full z-0" />
             
-            <div className="relative z-20 flex items-center justify-center transition-all duration-300 group-hover:scale-110 group-hover:rotate-6">
+            <div className="relative z-20 flex items-center justify-center transition-all duration-300 group-hover:scale-110 group-hover:rotate-6" style={{ width: '24px', height: '24px' }}>
               {isScreenSharing ? (
-                <MonitorOff className="w-6 h-6 text-white drop-shadow-lg" strokeWidth={2.5} fill="none" stroke="currentColor" style={{ display: 'block', flexShrink: 0, pointerEvents: 'none' }} />
+                <MdDesktopMac 
+                  size={24} 
+                  className="text-white" 
+                  style={{ 
+                    display: 'inline-block', 
+                    width: '24px', 
+                    height: '24px', 
+                    color: '#ffffff', 
+                    opacity: 1,
+                    visibility: 'visible'
+                  }} 
+                />
               ) : (
-                <Monitor className="w-6 h-6 text-white drop-shadow-lg" strokeWidth={2.5} fill="none" stroke="currentColor" style={{ display: 'block', flexShrink: 0, pointerEvents: 'none' }} />
+                <FiMonitor 
+                  size={24} 
+                  className="text-white" 
+                  style={{ 
+                    display: 'inline-block', 
+                    width: '24px', 
+                    height: '24px', 
+                    color: '#ffffff', 
+                    opacity: 1,
+                    visibility: 'visible'
+                  }} 
+                />
               )}
             </div>
             <div className="absolute inset-0 rounded-full bg-white/30 scale-0 group-active:scale-150 transition-all duration-500 opacity-0 group-active:opacity-100" />
@@ -230,7 +309,7 @@ export default function CallControls({
                 }
                 group overflow-hidden
               `}
-              style={{ width: '56px', height: '56px', minWidth: '56px', minHeight: '56px' }}
+              style={{ width: 'clamp(48px, 14vw, 56px)', height: 'clamp(48px, 14vw, 56px)', minWidth: '48px', minHeight: '48px' }}
               title="More options"
             >
               {/* Active state glow */}
@@ -245,11 +324,33 @@ export default function CallControls({
                 showMoreMenu 
                   ? 'rotate-180' 
                   : 'group-hover:rotate-90'
-              }`}>
+              }`} style={{ width: '24px', height: '24px' }}>
                 {showMoreMenu ? (
-                  <X className="w-6 h-6 text-white drop-shadow-lg" strokeWidth={2.5} fill="none" stroke="currentColor" style={{ display: 'block', flexShrink: 0, pointerEvents: 'none' }} />
+                  <FiX 
+                    size={24} 
+                    className="text-white" 
+                    style={{ 
+                      display: 'inline-block', 
+                      width: '24px', 
+                      height: '24px', 
+                      color: '#ffffff', 
+                      opacity: 1,
+                      visibility: 'visible'
+                    }} 
+                  />
                 ) : (
-                  <Settings className="w-6 h-6 text-white drop-shadow-lg" strokeWidth={2.5} fill="none" stroke="currentColor" style={{ display: 'block', flexShrink: 0, pointerEvents: 'none' }} />
+                  <FiMoreVertical 
+                    size={24} 
+                    className="text-white" 
+                    style={{ 
+                      display: 'inline-block', 
+                      width: '24px', 
+                      height: '24px', 
+                      color: '#ffffff', 
+                      opacity: 1,
+                      visibility: 'visible'
+                    }} 
+                  />
                 )}
               </div>
               <div className="absolute inset-0 rounded-full bg-white/30 scale-0 group-active:scale-150 transition-all duration-500 opacity-0 group-active:opacity-100" />
@@ -268,7 +369,18 @@ export default function CallControls({
                     className="w-full flex items-center space-x-3 px-4 py-3 rounded-xl hover:bg-dark-800/70 transition-all duration-200 text-left group hover:scale-[1.02]"
                   >
                     <div className="p-2 rounded-lg bg-primary-500/20 group-hover:bg-primary-500/30 transition">
-                      <UserPlus className="w-4 h-4 text-primary-400 group-hover:text-primary-300 transition" fill="none" stroke="currentColor" strokeWidth={2} />
+                      <FiUserPlus 
+                        size={16} 
+                        className="text-primary-400 group-hover:text-primary-300 transition" 
+                        style={{ 
+                          display: 'inline-block', 
+                          width: '16px', 
+                          height: '16px', 
+                          color: '#60a5fa', 
+                          opacity: 1,
+                          visibility: 'visible'
+                        }} 
+                      />
                     </div>
                     <span className="text-white text-sm font-medium">Add Participant</span>
                   </button>
@@ -282,7 +394,18 @@ export default function CallControls({
                     className="w-full flex items-center space-x-3 px-4 py-3 rounded-xl hover:bg-dark-800/70 transition-all duration-200 text-left group hover:scale-[1.02] mt-1"
                   >
                     <div className="p-2 rounded-lg bg-primary-500/20 group-hover:bg-primary-500/30 transition">
-                      <Settings className="w-4 h-4 text-primary-400 group-hover:text-primary-300 transition" fill="none" stroke="currentColor" strokeWidth={2} />
+                      <FiSettings 
+                        size={16} 
+                        className="text-primary-400 group-hover:text-primary-300 transition" 
+                        style={{ 
+                          display: 'inline-block', 
+                          width: '16px', 
+                          height: '16px', 
+                          color: '#60a5fa', 
+                          opacity: 1,
+                          visibility: 'visible'
+                        }} 
+                      />
                     </div>
                     <span className="text-white text-sm font-medium">Settings</span>
                   </button>
@@ -303,7 +426,7 @@ export default function CallControls({
             bg-red-500/95 hover:bg-red-600 border-red-400/60 shadow-red-500/60
             group overflow-hidden
           `}
-          style={{ width: '56px', height: '56px', minWidth: '56px', minHeight: '56px' }}
+          style={{ width: 'clamp(48px, 14vw, 56px)', height: 'clamp(48px, 14vw, 56px)', minWidth: '48px', minHeight: '48px' }}
           title="End call"
         >
           {/* Pulsing red glow with multiple layers */}
@@ -314,8 +437,19 @@ export default function CallControls({
           {/* Glass morphism overlay */}
           <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent rounded-full z-0" />
           
-          <div className="relative z-20 flex items-center justify-center transition-all duration-300 group-hover:rotate-90 group-hover:scale-110">
-            <PhoneOff className="w-6 h-6 text-white drop-shadow-lg" strokeWidth={2.5} fill="none" stroke="currentColor" style={{ display: 'block', flexShrink: 0, pointerEvents: 'none' }} />
+          <div className="relative z-20 flex items-center justify-center transition-all duration-300 group-hover:rotate-90 group-hover:scale-110" style={{ width: '24px', height: '24px' }}>
+            <MdCallEnd 
+              size={24} 
+              className="text-white" 
+              style={{ 
+                display: 'inline-block', 
+                width: '24px', 
+                height: '24px', 
+                color: '#ffffff', 
+                opacity: 1,
+                visibility: 'visible'
+              }} 
+            />
           </div>
 
           {/* Ripple effect */}
@@ -344,12 +478,34 @@ export default function CallControls({
               title="Close"
               aria-label="Close"
             >
-              <X className="w-5 h-5 text-dark-400 hover:text-white transition" fill="none" stroke="currentColor" strokeWidth={2} />
+              <FiX 
+                size={20} 
+                className="text-dark-400 hover:text-white transition" 
+                style={{ 
+                  display: 'inline-block', 
+                  width: '20px', 
+                  height: '20px', 
+                  color: '#94a3b8', 
+                  opacity: 1,
+                  visibility: 'visible'
+                }} 
+              />
             </button>
 
             <div className="flex items-start space-x-4 mb-6 pr-8">
               <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center flex-shrink-0 animate-pulse ring-4 ring-red-500/20">
-                <AlertTriangle className="w-8 h-8 text-red-400" fill="none" stroke="currentColor" strokeWidth={2} />
+                <FiAlertTriangle 
+                  size={32} 
+                  className="text-red-400" 
+                  style={{ 
+                    display: 'inline-block', 
+                    width: '32px', 
+                    height: '32px', 
+                    color: '#f87171', 
+                    opacity: 1,
+                    visibility: 'visible'
+                  }} 
+                />
               </div>
               <div className="flex-1 min-w-0 pt-1">
                 <h3 className="text-white font-semibold text-xl md:text-2xl mb-3">End Call?</h3>
@@ -372,7 +528,18 @@ export default function CallControls({
                 className="flex-1 px-5 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 rounded-xl text-white font-semibold transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2 shadow-lg shadow-red-500/30 text-base"
                 style={{ height: '48px' }}
               >
-                <PhoneOff className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} />
+                <MdCallEnd 
+                  size={20} 
+                  className="text-white" 
+                  style={{ 
+                    display: 'inline-block', 
+                    width: '20px', 
+                    height: '20px', 
+                    color: '#ffffff', 
+                    opacity: 1,
+                    visibility: 'visible'
+                  }} 
+                />
                 <span>End Call</span>
               </button>
             </div>

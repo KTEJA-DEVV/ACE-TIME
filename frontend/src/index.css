@@ -43,6 +43,137 @@ body {
   background: #64748b;
 }
 
+/* Mobile Responsive Utilities */
+@media (max-width: 639px) {
+  /* Mobile: < 640px */
+  body {
+    font-size: 16px; /* Prevent zoom on iOS */
+  }
+  
+  /* Touch targets - minimum 48x48px */
+  button, a, input[type="button"], input[type="submit"] {
+    min-height: 48px;
+    min-width: 48px;
+  }
+  
+  /* Larger text on mobile */
+  p, span, div {
+    font-size: clamp(16px, 4vw, 18px);
+  }
+  
+  /* Safe area padding for notches */
+  .safe-area-top {
+    padding-top: env(safe-area-inset-top);
+  }
+  
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  
+  .safe-area-left {
+    padding-left: env(safe-area-inset-left);
+  }
+  
+  .safe-area-right {
+    padding-right: env(safe-area-inset-right);
+  }
+}
+
+/* Tablet: 640px - 1024px */
+@media (min-width: 640px) and (max-width: 1023px) {
+  /* Tablet specific styles */
+}
+
+/* Desktop: > 1024px */
+@media (min-width: 1024px) {
+  /* Desktop specific styles */
+}
+
+/* Mobile Navigation Bottom Tab Bar */
+.mobile-bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(15, 23, 42, 0.95);
+  backdrop-filter: blur(20px);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: env(safe-area-inset-bottom);
+  z-index: 1000;
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  padding-top: 0.75rem;
+  padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+}
+
+.mobile-bottom-nav button {
+  min-width: 64px;
+  min-height: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: rgba(148, 163, 184, 1);
+  transition: all 0.2s;
+}
+
+.mobile-bottom-nav button.active {
+  color: rgb(99, 102, 241);
+}
+
+/* Mobile Full Screen Overlay */
+.mobile-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #020617;
+  z-index: 9998;
+  overflow-y: auto;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Swipe Gesture Indicator */
+.swipe-indicator {
+  position: absolute;
+  top: 0.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 2px;
+  z-index: 10;
+}
+
+/* Responsive Grid Utilities */
+@media (max-width: 639px) {
+  .responsive-grid-1 {
+    grid-template-columns: 1fr;
+  }
+  
+  .responsive-grid-2 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 640px) and (max-width: 1023px) {
+  .responsive-grid-2 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .responsive-grid-3 {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
 /* Custom scrollbar for transcript */
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
@@ -396,5 +527,131 @@ mark {
     opacity: 1;
     transform: translateY(0) scale(1);
   }
+}
+
+/* Ensure SVG icons are visible - CRITICAL FIX - Works for both lucide-react and react-icons */
+svg {
+  display: inline-block !important;
+  vertical-align: middle;
+  flex-shrink: 0;
+  max-width: 100%;
+  max-height: 100%;
+  visibility: visible !important;
+  opacity: 1 !important;
+  shape-rendering: geometricPrecision;
+  pointer-events: none;
+}
+
+/* Ensure react-icons are visible */
+svg[class*="react-icons"],
+.react-icons,
+svg[data-icon],
+[class*="react-icons"] {
+  display: inline-block !important;
+  vertical-align: middle;
+  flex-shrink: 0;
+  visibility: visible !important;
+  opacity: 1 !important;
+  color: inherit !important;
+  width: auto !important;
+  height: auto !important;
+}
+
+/* Ensure lucide-react icons are visible */
+svg[class*="lucide"],
+.lucide,
+[class*="lucide"],
+svg.lucide-react,
+.lucide-react {
+  display: inline-block !important;
+  vertical-align: middle;
+  flex-shrink: 0;
+  visibility: visible !important;
+  opacity: 1 !important;
+  color: inherit !important;
+  stroke: currentColor !important;
+  fill: none !important;
+  width: auto !important;
+  height: auto !important;
+}
+
+/* Fix for icons in buttons - CRITICAL - Works for both libraries */
+button svg,
+button .react-icons,
+button svg[class*="react-icons"],
+button svg[class*="lucide"],
+button .lucide,
+button svg[class*="lucide"],
+button [class*="lucide"],
+button svg.lucide-react {
+  display: inline-block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  flex-shrink: 0;
+  pointer-events: none;
+  color: inherit !important;
+  width: auto !important;
+  height: auto !important;
+}
+
+/* Ensure icons have proper color inheritance */
+svg[stroke="currentColor"],
+.lucide[stroke="currentColor"],
+svg {
+  color: inherit !important;
+  stroke: currentColor !important;
+}
+
+/* Force icon visibility in call controls - AGGRESSIVE - Works for react-icons and lucide */
+button[class*="rounded-full"] svg,
+button[class*="rounded-full"] .react-icons,
+button[class*="rounded-full"] .lucide,
+button[class*="rounded-full"] [class*="lucide"],
+button[class*="rounded-full"] svg[class*="react-icons"],
+button[class*="rounded-full"] svg.lucide-react,
+.rounded-full svg,
+.z-\[60\] svg,
+.z-\[60\] .react-icons,
+.z-\[60\] .lucide,
+.z-\[9999\] svg,
+.z-\[9999\] .react-icons,
+.z-\[9999\] button svg,
+button svg[class*="Fi"],
+button svg[class*="Md"] {
+  display: inline-block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  color: #ffffff !important;
+  stroke: #ffffff !important;
+  fill: none !important;
+  width: 24px !important;
+  height: 24px !important;
+  position: relative !important;
+  z-index: 20 !important;
+  flex-shrink: 0 !important;
+}
+
+/* Force icon visibility in tabs - Works for both libraries */
+button[class*="tab"] svg,
+button[class*="flex-shrink-0"] svg,
+[class*="tab"] .react-icons,
+[class*="tab"] .lucide {
+  display: inline-block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  color: inherit !important;
+  width: 16px !important;
+  height: 16px !important;
+}
+
+/* React-icons specific styling */
+svg[class*="react-icons"] {
+  fill: currentColor !important;
+}
+
+/* Feather icons (Fi*) need stroke instead of fill */
+svg[class*="react-icons"][class*="Fi"] {
+  stroke: currentColor !important;
+  fill: none !important;
 }
 

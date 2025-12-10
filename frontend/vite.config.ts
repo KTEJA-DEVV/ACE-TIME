@@ -10,8 +10,34 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    include: ['framer-motion'],
+    include: ['framer-motion', 'lucide-react'],
     force: true, // Force re-optimization
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'ui-vendor': ['lucide-react'],
+          'utils-vendor': ['zustand', 'socket.io-client'],
+        },
+        // Reduce chunk splitting for icons - bundle them together
+        chunkFileNames: 'assets/[name]-[hash].js',
+        entryFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash].[ext]',
+      },
+    },
+    // Improve build performance
+    target: 'esnext',
+    minify: 'terser',
+    terserOptions: {
+      compress: {
+        drop_console: false, // Keep console in dev
+        drop_debugger: true,
+      },
+    },
+    // Increase chunk size warning limit
+    chunkSizeWarningLimit: 1000,
   },
   server: {
     port: 3000,

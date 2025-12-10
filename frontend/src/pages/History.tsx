@@ -252,6 +252,15 @@ export default function History() {
 
                     <div className="flex items-center space-x-2 opacity-0 group-hover:opacity-100 transition">
                       <Link
+                        to={`/call/${call._id}/summary`}
+                        className="flex items-center space-x-1 px-3 py-1.5 glass-card-hover text-white rounded-lg transition text-sm"
+                        title="View full summary"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <FileText className="w-4 h-4" />
+                        <span>Summary</span>
+                      </Link>
+                      <Link
                         to={`/history/${call._id}`}
                         className="flex items-center space-x-1 px-3 py-1.5 glass-card-hover text-white rounded-lg transition text-sm"
                         title="View full details"

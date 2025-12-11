@@ -29,12 +29,10 @@ export default defineConfig({
     },
     // Improve build performance
     target: 'esnext',
-    minify: 'terser',
-    terserOptions: {
-      compress: {
-        drop_console: false, // Keep console in dev
-        drop_debugger: true,
-      },
+    minify: 'esbuild', // Use esbuild minification (faster, built-in)
+    // esbuild minification options
+    esbuild: {
+      drop: ['console', 'debugger'], // Drop console and debugger in production
     },
     // Increase chunk size warning limit
     chunkSizeWarningLimit: 1000,

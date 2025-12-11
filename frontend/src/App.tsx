@@ -22,7 +22,6 @@ const CallRoom = lazy(() => import('./pages/CallRoom'));
 const PrivateCall = lazy(() => import('./pages/PrivateCall'));
 const FaceTimeCallInterface = lazy(() => import('./components/FaceTimeCallInterface'));
 const History = lazy(() => import('./pages/History'));
-const CallHistory = lazy(() => import('./pages/CallHistory'));
 const CallHistoryEnhanced = lazy(() => import('./pages/CallHistoryEnhanced'));
 const CallDetail = lazy(() => import('./pages/CallDetail'));
 const CallSummary = lazy(() => import('./pages/CallSummary'));

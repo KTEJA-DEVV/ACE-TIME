@@ -71,6 +71,7 @@ interface CallState {
   remoteStreams: Map<string, MediaStream>; // Map of socketId -> remote stream (for multiple participants)
   speechRecognition: any | null;
   callRecorder: MediaRecorder | null; // For recording the call
+  recordingChunks: Blob[]; // Store recording chunks
   
   roomId: string | null;
   callId: string | null;
@@ -114,11 +115,15 @@ interface CallState {
   maximizeCall: () => void;
 }
 
-const ICE_SERVERS = {
+const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
   ],
+  iceCandidatePoolSize: 10, // Pre-gather candidates for faster connection
 };
 
 export const useCallStore = create<CallState>((set, get) => ({
@@ -130,6 +135,7 @@ export const useCallStore = create<CallState>((set, get) => ({
   remoteStreams: new Map<string, MediaStream>(),
   speechRecognition: null,
   callRecorder: null,
+  recordingChunks: [],
   
   roomId: null,
   callId: null,
@@ -290,20 +296,27 @@ export const useCallStore = create<CallState>((set, get) => ({
       const currentUserId = authUser?._id;
       const currentSocketId = socket.id;
       
-      const seen = new Set<string>();
-      const filteredParticipants = (data.participants || []).filter((p: any) => {
+      // CRITICAL: Deduplicate participants by userId (UI-level deduplication)
+      // This ensures no duplicate participants even if backend sends duplicates
+      const participantMap = new Map<string, any>();
+      (data.participants || []).forEach((p: any) => {
         // Filter out current user
         if (p.userId === currentUserId || p.socketId === currentSocketId) {
-          return false;
+          return;
         }
-        // Remove duplicates by userId or socketId
-        const key = `${p.userId}-${p.socketId}`;
-        if (seen.has(key)) {
-          return false;
+        // Use userId as key for deduplication (most reliable identifier)
+        const userId = p.userId || p._id;
+        if (userId && !participantMap.has(userId)) {
+          participantMap.set(userId, p);
+        } else if (userId && participantMap.has(userId)) {
+          // If duplicate found, keep the one with more complete data
+          const existing = participantMap.get(userId);
+          if (p.userName && !existing.userName) {
+            participantMap.set(userId, p);
+          }
         }
-        seen.add(key);
-        return true;
       });
+      const filteredParticipants = Array.from(participantMap.values());
       
       console.log('[ROOM] Joined room with participants:', filteredParticipants.length);
       set({
@@ -322,18 +335,29 @@ export const useCallStore = create<CallState>((set, get) => ({
         return;
       }
       
-      console.log('[ROOM] 🎉 User joined event:', {
+      console.log('[ROOM] 🎉 ========== USER JOINED EVENT ==========');
+      console.log('[ROOM] 🎉 User details:', {
         socketId: data.socketId,
         userName: data.userName,
         userId: data.userId,
       });
       
       set((state) => {
-        // Don't add if already in participants (avoid duplicates)
-        const exists = state.participants.some(p => p.socketId === data.socketId);
+        // CRITICAL: Deduplicate by userId (most reliable identifier)
+        const userId = data.userId || data._id;
+        const exists = state.participants.some(p => 
+          (p.userId === userId) || (p.socketId === data.socketId)
+        );
         if (exists) {
-          console.log('[ROOM] Participant already exists:', data.socketId);
-          return state;
+          console.log('[ROOM] ⚠️ Participant already exists:', { userId, socketId: data.socketId });
+          // Update existing participant if new data is more complete
+          return {
+            participants: state.participants.map(p => 
+              (p.userId === userId || p.socketId === data.socketId) 
+                ? { ...p, ...data } // Merge new data
+                : p
+            ),
+          };
         }
         console.log('[ROOM] ✅ Adding new participant:', data.userName, data.socketId);
         return {
@@ -342,6 +366,16 @@ export const useCallStore = create<CallState>((set, get) => ({
       });
       
       const { peerConnection, localStream } = get();
+      console.log('[WEBRTC] 🔍 Checking peer connection and local stream:', {
+        hasPeerConnection: !!peerConnection,
+        hasLocalStream: !!localStream,
+        peerConnectionState: peerConnection ? {
+          connectionState: peerConnection.connectionState,
+          iceConnectionState: peerConnection.iceConnectionState,
+          signalingState: peerConnection.signalingState,
+        } : null,
+      });
+      
       if (peerConnection && localStream) {
         try {
           // CRITICAL: Verify tracks are added before creating offer
@@ -349,7 +383,8 @@ export const useCallStore = create<CallState>((set, get) => ({
           const hasVideoSender = senders.some(s => s.track && s.track.kind === 'video');
           const hasAudioSender = senders.some(s => s.track && s.track.kind === 'audio');
           
-          console.log('[WEBRTC] 📊 Peer connection senders check:', {
+          console.log('[WEBRTC] 📊 ========== PEER CONNECTION SENDERS CHECK ==========');
+          console.log('[WEBRTC] 📊 Sender details:', {
             totalSenders: senders.length,
             hasVideoSender,
             hasAudioSender,
@@ -357,23 +392,47 @@ export const useCallStore = create<CallState>((set, get) => ({
               kind: s.track?.kind,
               enabled: s.track?.enabled,
               id: s.track?.id,
+              readyState: s.track?.readyState,
             })),
           });
           
-          // If tracks are missing, add them now (shouldn't happen, but safety check)
+          // CRITICAL: If tracks are missing, add them now
           if (!hasVideoSender || !hasAudioSender) {
             console.warn('[WEBRTC] ⚠️ Missing tracks in peer connection, adding now...');
             localStream.getTracks().forEach(track => {
               const existingSender = senders.find(s => s.track && s.track.id === track.id);
               if (!existingSender) {
-                console.log('[WEBRTC] ➕ Adding missing track:', track.kind, track.id);
+                console.log('[WEBRTC] ➕ Adding missing track:', {
+                  kind: track.kind,
+                  id: track.id,
+                  enabled: track.enabled,
+                  readyState: track.readyState,
+                });
                 try {
-                  peerConnection.addTrack(track, localStream);
-                  console.log('[WEBRTC] ✅ Track added successfully');
+                  const sender = peerConnection.addTrack(track, localStream);
+                  console.log('[WEBRTC] ✅ Track added successfully:', {
+                    kind: track.kind,
+                    senderCreated: !!sender,
+                  });
                 } catch (error: any) {
-                  console.error('[WEBRTC] ❌ Error adding track:', error.message);
+                  console.error('[WEBRTC] ❌ Error adding track:', {
+                    kind: track.kind,
+                    error: error.message,
+                  });
                 }
+              } else {
+                console.log('[WEBRTC] ℹ️ Track already added:', track.kind, track.id);
               }
+            });
+            
+            // Re-check senders after adding
+            const updatedSenders = peerConnection.getSenders();
+            console.log('[WEBRTC] 📊 Updated senders after adding tracks:', {
+              totalSenders: updatedSenders.length,
+              senders: updatedSenders.map(s => ({
+                kind: s.track?.kind,
+                enabled: s.track?.enabled,
+              })),
             });
           }
           
@@ -384,7 +443,8 @@ export const useCallStore = create<CallState>((set, get) => ({
           
           // Create offer if host OR if it's a 1-on-1 call (participantCount === 1 means this is the second person)
           if (isHost || participantCount === 1) {
-            console.log('[WEBRTC] 🎯 Creating offer for participant:', {
+            console.log('[WEBRTC] 🎯 ========== CREATING OFFER ==========');
+            console.log('[WEBRTC] 🎯 Offer details:', {
               socketId: data.socketId,
               userName: data.userName,
               isHost,
@@ -395,6 +455,8 @@ export const useCallStore = create<CallState>((set, get) => ({
               audioTracks: localStream.getAudioTracks().length,
               videoEnabled: localStream.getVideoTracks()[0]?.enabled,
               audioEnabled: localStream.getAudioTracks()[0]?.enabled,
+              videoTrackId: localStream.getVideoTracks()[0]?.id,
+              audioTrackId: localStream.getAudioTracks()[0]?.id,
             });
             
             const offer = await peerConnection.createOffer({
@@ -404,20 +466,28 @@ export const useCallStore = create<CallState>((set, get) => ({
             
             console.log('[WEBRTC] 📤 Offer created:', {
               type: offer.type,
-              sdp: offer.sdp?.substring(0, 200) + '...',
+              sdpLength: offer.sdp?.length || 0,
+              sdpPreview: offer.sdp?.substring(0, 300) + '...',
+              hasVideo: offer.sdp?.includes('m=video'),
+              hasAudio: offer.sdp?.includes('m=audio'),
             });
             
             await peerConnection.setLocalDescription(offer);
-            console.log('[WEBRTC] ✅ Local description set, signaling state:', peerConnection.signalingState);
+            console.log('[WEBRTC] ✅ Local description set:', {
+              signalingState: peerConnection.signalingState,
+              localDescriptionType: peerConnection.localDescription?.type,
+            });
             
             socket.emit('signal:offer', {
               targetId: data.socketId,
               offer: peerConnection.localDescription,
             });
-            console.log('[WEBRTC] 📡 Offer sent via Socket.IO to:', data.socketId);
+            console.log('[WEBRTC] 📡 ========== OFFER SENT ==========');
+            console.log('[WEBRTC] 📡 Sent to:', data.socketId, data.userName);
             
-            // ICE candidates will be sent automatically by onicecandidate handler
-            // as they are generated, now that we have a participant
+            // Send any queued ICE candidates immediately
+            // Note: ICE candidates are sent automatically by onicecandidate handler
+            // But we should also send any that were queued before this participant joined
           } else {
             console.log('[WEBRTC] ⏸️ Not creating offer (not host and not 1-on-1):', {
               isHost,
@@ -425,13 +495,20 @@ export const useCallStore = create<CallState>((set, get) => ({
             });
           }
         } catch (error: any) {
-          console.error('[WEBRTC] ❌ Error creating offer:', error.message, error);
+          console.error('[WEBRTC] ❌ ========== ERROR CREATING OFFER ==========');
+          console.error('[WEBRTC] ❌ Error details:', {
+            message: error.message,
+            stack: error.stack,
+            name: error.name,
+          });
           toast.error('Connection Error', 'Failed to establish video connection');
         }
       } else {
-        console.warn('[WEBRTC] ⚠️ Cannot create offer - missing peer connection or local stream:', {
+        console.error('[WEBRTC] ❌ ========== CANNOT CREATE OFFER ==========');
+        console.error('[WEBRTC] ❌ Missing requirements:', {
           hasPeerConnection: !!peerConnection,
           hasLocalStream: !!localStream,
+          peerConnectionState: peerConnection ? peerConnection.signalingState : 'N/A',
         });
       }
     });
@@ -540,33 +617,63 @@ export const useCallStore = create<CallState>((set, get) => ({
     socket.on('signal:answer', async (data) => {
       const { peerConnection } = get();
       if (!peerConnection) {
-        console.error('[WEBRTC] ❌ Cannot handle answer - no peer connection');
+        console.error('[WEBRTC] ❌ ========== CANNOT HANDLE ANSWER ==========');
+        console.error('[WEBRTC] ❌ No peer connection available');
         return;
       }
       
       try {
         console.log('[WEBRTC] 📥 ========== RECEIVED ANSWER ==========');
-        console.log('[WEBRTC] 📥 Answer from:', data.fromId || 'unknown');
         console.log('[WEBRTC] 📥 Answer details:', {
-          type: data.answer?.type,
-          sdp: data.answer?.sdp?.substring(0, 200) + '...',
+          fromId: data.fromId || 'unknown',
+          answerType: data.answer?.type,
+          sdpLength: data.answer?.sdp?.length || 0,
+          sdpPreview: data.answer?.sdp?.substring(0, 300) + '...',
+          hasVideo: data.answer?.sdp?.includes('m=video'),
+          hasAudio: data.answer?.sdp?.includes('m=audio'),
         });
-        console.log('[WEBRTC] 📥 Current signaling state:', peerConnection.signalingState);
+        console.log('[WEBRTC] 📥 Current peer connection state:', {
+          signalingState: peerConnection.signalingState,
+          connectionState: peerConnection.connectionState,
+          iceConnectionState: peerConnection.iceConnectionState,
+          iceGatheringState: peerConnection.iceGatheringState,
+        });
         
         // Check if we're in the right state
         if (peerConnection.signalingState === 'have-local-offer' || peerConnection.signalingState === 'stable') {
           console.log('[WEBRTC] 🔧 Setting remote answer...');
           await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
-          console.log('[WEBRTC] ✅ Remote answer set successfully, signaling state:', peerConnection.signalingState);
+          console.log('[WEBRTC] ✅ ========== REMOTE ANSWER SET ==========');
+          console.log('[WEBRTC] ✅ Updated signaling state:', peerConnection.signalingState);
+          console.log('[WEBRTC] ✅ Connection state:', peerConnection.connectionState);
+          console.log('[WEBRTC] ✅ ICE connection state:', peerConnection.iceConnectionState);
+          
+          // Check if we have remote tracks
+          const receivers = peerConnection.getReceivers();
+          console.log('[WEBRTC] 📊 Remote receivers after answer:', {
+            totalReceivers: receivers.length,
+            receivers: receivers.map(r => ({
+              kind: r.track?.kind,
+              trackId: r.track?.id,
+              trackEnabled: r.track?.enabled,
+              trackReadyState: r.track?.readyState,
+            })),
+          });
         } else {
-          console.warn('[WEBRTC] ⚠️ Cannot set remote answer - wrong state:', {
+          console.warn('[WEBRTC] ⚠️ ========== CANNOT SET REMOTE ANSWER ==========');
+          console.warn('[WEBRTC] ⚠️ Wrong signaling state:', {
             currentState: peerConnection.signalingState,
             expectedState: 'have-local-offer or stable',
           });
         }
         console.log('[WEBRTC] 📥 ========== ANSWER HANDLED ==========');
       } catch (error: any) {
-        console.error('[WEBRTC] ❌ Error handling answer:', error.message, error);
+        console.error('[WEBRTC] ❌ ========== ERROR HANDLING ANSWER ==========');
+        console.error('[WEBRTC] ❌ Error details:', {
+          message: error.message,
+          stack: error.stack,
+          name: error.name,
+        });
         // Don't show error to user for WebRTC signaling issues
       }
     });
@@ -608,12 +715,12 @@ export const useCallStore = create<CallState>((set, get) => ({
     });
 
     socket.on('call:started', (data) => {
-      console.log('[CALL] Call started event received:', data);
+      console.log('[CALL] 📞 Call started event received:', data);
       const startTime = Date.now();
       set({
         callStatus: 'active',
         callId: data.callId,
-        isRecording: true,
+        isRecording: true, // Set flag, actual recording will start when streams are ready
         callStartTime: startTime, // Store start time for continuous duration
       });
       // Start speech recognition for transcription
@@ -623,17 +730,20 @@ export const useCallStore = create<CallState>((set, get) => ({
         setTimeout(() => {
           console.log('[CALL] Starting speech recognition after call:started');
           get().startSpeechRecognition();
-          // Start call recording
+          // CRITICAL: Start call recording automatically when call starts
+          console.log('[RECORDING] Auto-starting recording after call:started event');
           get().startCallRecording();
-        }, 500);
+        }, 1000); // Wait 1 second for streams to be ready
       } else {
         console.warn('[CALL] ⚠️ Socket not connected, cannot start transcription');
         // Wait for socket and retry
         const checkSocketInterval = setInterval(() => {
-          const { socket: checkSocket } = get();
-          if (checkSocket && checkSocket.connected) {
-            console.log('[CALL] Socket connected, starting recognition');
+          const { socket: checkSocket, localStream } = get();
+          if (checkSocket && checkSocket.connected && localStream) {
+            console.log('[CALL] Socket connected and streams ready, starting services');
             get().startSpeechRecognition();
+            // CRITICAL: Start call recording when socket connects and streams are ready
+            console.log('[RECORDING] Auto-starting recording after socket connection');
             get().startCallRecording();
             get().startAIAnalysis();
             clearInterval(checkSocketInterval);
@@ -732,6 +842,44 @@ export const useCallStore = create<CallState>((set, get) => ({
           transcriptElement.scrollTop = transcriptElement.scrollHeight;
         }
       }, 100);
+    });
+
+    // Handle remote participant audio state changes
+    socket.on('participant:audio:changed', (data: { socketId: string; userId: string; userName: string; isMuted: boolean }) => {
+      console.log('[AUDIO] 📥 Remote participant audio state changed:', {
+        socketId: data.socketId,
+        userId: data.userId,
+        userName: data.userName,
+        isMuted: data.isMuted,
+      });
+      
+      // Update participant state
+      set((state) => ({
+        participants: state.participants.map((p) =>
+          p.socketId === data.socketId || p.userId === data.userId
+            ? { ...p, isMuted: data.isMuted }
+            : p
+        ),
+      }));
+    });
+
+    // Handle remote participant video state changes
+    socket.on('participant:video:changed', (data: { socketId: string; userId: string; userName: string; isVideoOff: boolean }) => {
+      console.log('[VIDEO] 📥 Remote participant video state changed:', {
+        socketId: data.socketId,
+        userId: data.userId,
+        userName: data.userName,
+        isVideoOff: data.isVideoOff,
+      });
+      
+      // Update participant state
+      set((state) => ({
+        participants: state.participants.map((p) =>
+          p.socketId === data.socketId || p.userId === data.userId
+            ? { ...p, isVideoOff: data.isVideoOff }
+            : p
+        ),
+      }));
     });
 
     socket.on('ai:notes', (notes: AINotes) => {
@@ -1336,6 +1484,9 @@ export const useCallStore = create<CallState>((set, get) => ({
       set({
         peerConnection: pc,
         localStream: stream,
+        // CRITICAL: Initialize mute/video state from actual track state
+        isMuted: !stream.getAudioTracks()[0]?.enabled ?? false,
+        isVideoOff: !stream.getVideoTracks()[0]?.enabled ?? false,
       });
 
       // Ensure socket is connected before emitting room:join
@@ -1479,28 +1630,58 @@ export const useCallStore = create<CallState>((set, get) => ({
   },
 
   toggleMute: () => {
-    const { localStream, speechRecognition, socket, roomId } = get();
+    const { localStream, speechRecognition, socket, roomId, peerConnection, peerConnections } = get();
     
     if (!localStream) {
-      console.warn('[MUTE] No local stream available');
+      console.warn('[MUTE] ⚠️ No local stream available');
       return;
     }
     
     // Get actual track state (more reliable than store state)
     const audioTracks = localStream.getAudioTracks();
     if (audioTracks.length === 0) {
-      console.warn('[MUTE] No audio tracks available');
+      console.warn('[MUTE] ⚠️ No audio tracks available');
       return;
     }
     
-    // Check current track state
-    const currentTrackEnabled = audioTracks[0].enabled;
-    const newMutedState = !currentTrackEnabled;
+    const audioTrack = audioTracks[0];
     
-    // Update track state
+    // Check current track state BEFORE toggling
+    const currentTrackEnabled = audioTrack.enabled;
+    const newTrackEnabled = !currentTrackEnabled;
+    const newMutedState = !newTrackEnabled; // Muted = track disabled
+    
+    console.log('[MUTE] 🔄 Before toggle - Track enabled:', currentTrackEnabled, 'State muted:', !currentTrackEnabled);
+    
+    // CRITICAL: Update track state (enabled = unmuted, disabled = muted)
+    audioTrack.enabled = newTrackEnabled;
+    
+    console.log('[MUTE] ✅ After toggle - Track enabled:', audioTrack.enabled, 'State muted:', newMutedState);
+    
+    // Update all audio tracks in the stream
     audioTracks.forEach(track => {
-      track.enabled = newMutedState;
-      console.log('[MUTE] Track enabled set to:', track.enabled, 'track ID:', track.id);
+      if (track.id !== audioTrack.id) {
+        track.enabled = newTrackEnabled;
+      }
+    });
+    
+    // Update peer connection senders to reflect track state
+    if (peerConnection) {
+      const senders = peerConnection.getSenders();
+      const audioSender = senders.find(s => s.track?.kind === 'audio');
+      if (audioSender && audioSender.track) {
+        console.log('[MUTE] 📡 Peer connection audio sender track enabled:', audioSender.track.enabled);
+        // The track state change should propagate automatically, but we log it
+      }
+    }
+    
+    // Update all peer connections (for multi-participant calls)
+    peerConnections.forEach((pc, socketId) => {
+      const senders = pc.getSenders();
+      const audioSender = senders.find(s => s.track?.kind === 'audio');
+      if (audioSender && audioSender.track) {
+        console.log(`[MUTE] 📡 Peer connection ${socketId} audio sender track enabled:`, audioSender.track.enabled);
+      }
     });
     
     // Update store state to match track state
@@ -1509,21 +1690,21 @@ export const useCallStore = create<CallState>((set, get) => ({
     // Notify other participants of audio state change
     if (socket && roomId) {
       socket.emit('participant:audio:toggle', { isMuted: newMutedState });
-      console.log('[MUTE] Emitted state change:', newMutedState);
+      console.log('[MUTE] 📤 Emitted state change to room:', { roomId, isMuted: newMutedState });
     }
     
     // Stop speech recognition when muted, restart when unmuted
     if (newMutedState) {
       // Muted - stop recognition
       if (speechRecognition) {
-        console.log('[MUTE] Stopping speech recognition (muted)');
+        console.log('[MUTE] ⏸️ Stopping speech recognition (muted)');
         get().stopSpeechRecognition();
       }
     } else {
       // Unmuted - start recognition if call is active
       const { callStatus } = get();
       if (callStatus === 'active' && !speechRecognition) {
-        console.log('[MUTE] Starting speech recognition (unmuted)');
+        console.log('[MUTE] ▶️ Starting speech recognition (unmuted)');
         setTimeout(() => {
           get().startSpeechRecognition();
         }, 500);
@@ -1532,28 +1713,58 @@ export const useCallStore = create<CallState>((set, get) => ({
   },
 
   toggleVideo: () => {
-    const { localStream, socket, roomId } = get();
+    const { localStream, socket, roomId, peerConnection, peerConnections } = get();
     
     if (!localStream) {
-      console.warn('[VIDEO] No local stream available');
+      console.warn('[VIDEO] ⚠️ No local stream available');
       return;
     }
     
     // Get actual track state (more reliable than store state)
     const videoTracks = localStream.getVideoTracks();
     if (videoTracks.length === 0) {
-      console.warn('[VIDEO] No video tracks available');
+      console.warn('[VIDEO] ⚠️ No video tracks available');
       return;
     }
     
-    // Check current track state
-    const currentTrackEnabled = videoTracks[0].enabled;
-    const newVideoOff = !currentTrackEnabled;
+    const videoTrack = videoTracks[0];
     
-    // Update track state
+    // Check current track state BEFORE toggling
+    const currentTrackEnabled = videoTrack.enabled;
+    const newTrackEnabled = !currentTrackEnabled;
+    const newVideoOff = !newTrackEnabled; // Video off = track disabled
+    
+    console.log('[VIDEO] 🔄 Before toggle - Track enabled:', currentTrackEnabled, 'State videoOff:', !currentTrackEnabled);
+    
+    // CRITICAL: Update track state (enabled = video on, disabled = video off)
+    videoTrack.enabled = newTrackEnabled;
+    
+    console.log('[VIDEO] ✅ After toggle - Track enabled:', videoTrack.enabled, 'State videoOff:', newVideoOff);
+    
+    // Update all video tracks in the stream
     videoTracks.forEach(track => {
-      track.enabled = newVideoOff;
-      console.log('[VIDEO] Track enabled set to:', track.enabled, 'track ID:', track.id);
+      if (track.id !== videoTrack.id) {
+        track.enabled = newTrackEnabled;
+      }
+    });
+    
+    // Update peer connection senders to reflect track state
+    if (peerConnection) {
+      const senders = peerConnection.getSenders();
+      const videoSender = senders.find(s => s.track?.kind === 'video');
+      if (videoSender && videoSender.track) {
+        console.log('[VIDEO] 📡 Peer connection video sender track enabled:', videoSender.track.enabled);
+        // The track state change should propagate automatically, but we log it
+      }
+    }
+    
+    // Update all peer connections (for multi-participant calls)
+    peerConnections.forEach((pc, socketId) => {
+      const senders = pc.getSenders();
+      const videoSender = senders.find(s => s.track?.kind === 'video');
+      if (videoSender && videoSender.track) {
+        console.log(`[VIDEO] 📡 Peer connection ${socketId} video sender track enabled:`, videoSender.track.enabled);
+      }
     });
     
     // Update store state to match track state
@@ -1562,7 +1773,7 @@ export const useCallStore = create<CallState>((set, get) => ({
     // Notify other participants of video state change
     if (socket && roomId) {
       socket.emit('participant:video:toggle', { isVideoOff: newVideoOff });
-      console.log('[VIDEO] Emitted state change:', newVideoOff);
+      console.log('[VIDEO] 📤 Emitted state change to room:', { roomId, isVideoOff: newVideoOff });
     }
   },
 
@@ -1993,156 +2204,243 @@ export const useCallStore = create<CallState>((set, get) => ({
   startCallRecording: () => {
     const { localStream, remoteStream, callId, callRecorder } = get();
     
-    // Don't start if already recording or no call ID
-    if (callRecorder) {
-      console.log('[RECORDING] Already recording');
+    // Don't start if already recording
+    if (callRecorder && callRecorder.state !== 'inactive') {
+      console.log('[RECORDING] Already recording, state:', callRecorder.state);
       return;
     }
     
     if (!callId) {
-      console.log('[RECORDING] No call ID, skipping recording');
+      console.log('[RECORDING] ⚠️ No call ID, skipping recording');
       return;
     }
     
     if (!localStream) {
-      console.log('[RECORDING] No local stream available');
+      console.log('[RECORDING] ⚠️ No local stream available');
       return;
     }
     
     // Check MediaRecorder support
     if (!window.MediaRecorder) {
-      console.warn('[RECORDING] MediaRecorder not supported');
+      console.warn('[RECORDING] ❌ MediaRecorder not supported in this browser');
+      toast.error('Recording Not Supported', 'MediaRecorder API is not available');
       return;
     }
     
     try {
-      // Combine local and remote streams for recording
-      const tracks: MediaStreamTrack[] = [];
+      console.log('[RECORDING] 🎬 Starting call recording...');
+      console.log('[RECORDING] Streams available:', {
+        hasLocalStream: !!localStream,
+        localVideoTracks: localStream.getVideoTracks().length,
+        localAudioTracks: localStream.getAudioTracks().length,
+        hasRemoteStream: !!remoteStream,
+        remoteVideoTracks: remoteStream?.getVideoTracks().length || 0,
+        remoteAudioTracks: remoteStream?.getAudioTracks().length || 0,
+      });
       
-      // Add local stream tracks
+      // CRITICAL: Combine local and remote streams for recording
+      const mixedStream = new MediaStream();
+      
+      // Add local stream tracks (user's own video/audio)
       localStream.getTracks().forEach(track => {
-        if (track.kind === 'audio' || track.kind === 'video') {
-          tracks.push(track);
+        if (track.readyState === 'live' && (track.kind === 'audio' || track.kind === 'video')) {
+          console.log('[RECORDING] ➕ Adding local track:', track.kind, track.id);
+          mixedStream.addTrack(track);
         }
       });
       
-      // Add remote stream tracks if available
+      // Add remote stream tracks (other participants' video/audio)
       if (remoteStream) {
         remoteStream.getTracks().forEach(track => {
-          if (track.kind === 'audio' || track.kind === 'video') {
-            tracks.push(track);
+          if (track.readyState === 'live' && (track.kind === 'audio' || track.kind === 'video')) {
+            console.log('[RECORDING] ➕ Adding remote track:', track.kind, track.id);
+            mixedStream.addTrack(track);
           }
         });
       }
       
-      if (tracks.length === 0) {
-        console.warn('[RECORDING] No tracks available for recording');
+      const totalTracks = mixedStream.getTracks().length;
+      const videoTracks = mixedStream.getVideoTracks().length;
+      const audioTracks = mixedStream.getAudioTracks().length;
+      
+      console.log('[RECORDING] 📊 Mixed stream tracks:', {
+        totalTracks,
+        videoTracks,
+        audioTracks,
+      });
+      
+      if (totalTracks === 0) {
+        console.warn('[RECORDING] ⚠️ No active tracks available for recording');
+        toast.warning('Recording Warning', 'No active media tracks to record');
         return;
       }
       
-      const recordingStream = new MediaStream(tracks);
-      
-      // Find supported mime type
+      // Find supported mime type (prefer VP9 for better compression)
       const supportedTypes = [
-        'video/webm;codecs=vp9,opus',
-        'video/webm;codecs=vp8,opus',
-        'video/webm',
-        'video/mp4',
+        'video/webm;codecs=vp9,opus', // Best compression
+        'video/webm;codecs=vp8,opus', // Good compression
+        'video/webm', // Fallback
+        'audio/webm;codecs=opus', // Audio-only fallback
       ];
       
       let selectedMimeType = '';
       for (const mimeType of supportedTypes) {
         if (MediaRecorder.isTypeSupported(mimeType)) {
           selectedMimeType = mimeType;
+          console.log('[RECORDING] ✅ Selected codec:', mimeType);
           break;
         }
       }
       
       if (!selectedMimeType) {
-        console.warn('[RECORDING] No supported codec found, using default');
+        console.warn('[RECORDING] ⚠️ No supported codec found, using default');
         selectedMimeType = 'video/webm';
       }
       
-      const recorder = new MediaRecorder(
-        recordingStream,
-        selectedMimeType ? { mimeType: selectedMimeType } : undefined
-      );
+      // Create MediaRecorder with selected codec
+      const recorder = new MediaRecorder(mixedStream, {
+        mimeType: selectedMimeType,
+        videoBitsPerSecond: 2500000, // 2.5 Mbps for good quality/size balance
+      });
       
-      const chunks: Blob[] = [];
+      // CRITICAL: Clear previous chunks and store in state
+      set({ recordingChunks: [] });
       
       recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          chunks.push(event.data);
-          console.log('[RECORDING] Chunk recorded:', event.data.size, 'bytes');
+        if (event.data && event.data.size > 0) {
+          console.log('[RECORDING] 📦 Chunk received:', {
+            size: event.data.size,
+            type: event.data.type,
+          });
+          set((state) => ({
+            recordingChunks: [...state.recordingChunks, event.data],
+          }));
         }
       };
       
       recorder.onerror = (event: any) => {
-        console.error('[RECORDING] Error:', event.error);
-        set({ callRecorder: null });
+        console.error('[RECORDING] ❌ Recording error:', event.error);
+        toast.error('Recording Error', 'An error occurred while recording');
+        set({ callRecorder: null, isRecording: false });
       };
       
       recorder.onstop = async () => {
-        console.log('[RECORDING] Recording stopped, uploading...');
-        const { callId: currentCallId } = get();
+        console.log('[RECORDING] ⏹️ Recording stopped, preparing upload...');
+        const { callId: currentCallId, recordingChunks: finalChunks } = get();
         
-        if (chunks.length > 0 && currentCallId) {
-          try {
-            const blob = new Blob(chunks, { type: selectedMimeType || 'video/webm' });
-            const formData = new FormData();
-            formData.append('recording', blob, `recording-${currentCallId}-${Date.now()}.webm`);
-            
-            const token = localStorage.getItem('accessToken');
-            if (token) {
-              const response = await fetch(`${API_URL}/api/calls/${currentCallId}/recording`, {
-                method: 'POST',
-                headers: {
-                  'Authorization': `Bearer ${token}`,
-                },
-                body: formData,
-              });
-              
-              if (response.ok) {
-                console.log('[RECORDING] ✅ Recording uploaded successfully');
-                toast.success('Recording Saved', 'Call recording has been saved');
-              } else {
-                console.error('[RECORDING] Upload failed:', await response.text());
-                toast.error('Upload Failed', 'Could not upload recording');
-              }
-            }
-          } catch (error: any) {
-            console.error('[RECORDING] Upload error:', error);
-            toast.error('Upload Error', error.message);
-          }
+        if (finalChunks.length === 0) {
+          console.warn('[RECORDING] ⚠️ No recording chunks collected');
+          set({ callRecorder: null, isRecording: false, recordingChunks: [] });
+          return;
         }
         
-        set({ callRecorder: null });
+        if (!currentCallId) {
+          console.error('[RECORDING] ❌ No call ID for upload');
+          set({ callRecorder: null, isRecording: false, recordingChunks: [] });
+          return;
+        }
+        
+        try {
+          console.log('[RECORDING] 📤 Creating blob from', finalChunks.length, 'chunks...');
+          const blob = new Blob(finalChunks, { type: selectedMimeType || 'video/webm' });
+          console.log('[RECORDING] ✅ Blob created:', {
+            size: blob.size,
+            type: blob.type,
+            sizeMB: (blob.size / (1024 * 1024)).toFixed(2),
+          });
+          
+          const formData = new FormData();
+          const filename = `recording-${currentCallId}-${Date.now()}.webm`;
+          formData.append('recording', blob, filename);
+          
+          const token = localStorage.getItem('accessToken');
+          if (!token) {
+            console.error('[RECORDING] ❌ No access token available');
+            toast.error('Upload Failed', 'Authentication required');
+            set({ callRecorder: null, isRecording: false, recordingChunks: [] });
+            return;
+          }
+          
+          console.log('[RECORDING] 📤 Uploading to server...');
+          const response = await fetch(`${API_URL}/api/calls/${currentCallId}/recording`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+            },
+            body: formData,
+          });
+          
+          if (response.ok) {
+            const result = await response.json();
+            console.log('[RECORDING] ✅ Recording uploaded successfully:', result);
+            toast.success('Recording Saved', 'Call recording has been saved successfully');
+          } else {
+            const errorText = await response.text();
+            console.error('[RECORDING] ❌ Upload failed:', {
+              status: response.status,
+              statusText: response.statusText,
+              error: errorText,
+            });
+            toast.error('Upload Failed', `Could not upload recording: ${response.statusText}`);
+          }
+        } catch (error: any) {
+          console.error('[RECORDING] ❌ Upload error:', error);
+          toast.error('Upload Error', error.message || 'Failed to upload recording');
+        } finally {
+          // Clear recording state
+          set({ callRecorder: null, isRecording: false, recordingChunks: [] });
+        }
       };
       
-      // Start recording with 1 second chunks
+      // Start recording with 1 second chunks (collects data every second)
       recorder.start(1000);
       set({ callRecorder: recorder, isRecording: true });
-      console.log('[RECORDING] ✅ Started call recording with', selectedMimeType || 'default codec');
+      console.log('[RECORDING] ✅ Recording started successfully:', {
+        state: recorder.state,
+        mimeType: selectedMimeType,
+        tracks: totalTracks,
+      });
+      toast.success('Recording Started', 'Call is being recorded');
       
     } catch (error: any) {
-      console.error('[RECORDING] Failed to start recording:', error.message);
-      set({ callRecorder: null });
+      console.error('[RECORDING] ❌ Failed to start recording:', {
+        error: error.message,
+        stack: error.stack,
+      });
+      toast.error('Recording Failed', error.message || 'Could not start recording');
+      set({ callRecorder: null, isRecording: false });
     }
   },
 
   stopCallRecording: async () => {
     const { callRecorder } = get();
     
-    if (callRecorder && callRecorder.state !== 'inactive') {
-      try {
-        callRecorder.stop();
-        console.log('[RECORDING] Stopping call recording...');
-        // Wait a bit for the stop event to fire
-        await new Promise(resolve => setTimeout(resolve, 500));
-      } catch (error) {
-        console.error('[RECORDING] Error stopping recording:', error);
-        set({ callRecorder: null });
-      }
+    if (!callRecorder) {
+      console.log('[RECORDING] No active recording to stop');
+      return;
+    }
+    
+    if (callRecorder.state === 'inactive') {
+      console.log('[RECORDING] Recording already stopped');
+      set({ callRecorder: null, isRecording: false });
+      return;
+    }
+    
+    try {
+      console.log('[RECORDING] ⏹️ Stopping call recording, current state:', callRecorder.state);
+      
+      // Stop the recorder (this will trigger onstop event)
+      callRecorder.stop();
+      
+      // Wait for onstop to complete (it handles the upload)
+      // Give it enough time to process chunks and upload
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      console.log('[RECORDING] ✅ Recording stopped');
+    } catch (error: any) {
+      console.error('[RECORDING] ❌ Error stopping recording:', error);
+      toast.error('Recording Error', 'Failed to stop recording properly');
+      set({ callRecorder: null, isRecording: false, recordingChunks: [] });
     }
   },
 
@@ -2176,6 +2474,7 @@ export const useCallStore = create<CallState>((set, get) => ({
       remoteStream: null,
       speechRecognition: null,
       callRecorder: null,
+      recordingChunks: [],
       roomId: null,
       callId: null,
       userName: null,

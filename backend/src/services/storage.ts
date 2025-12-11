@@ -49,12 +49,18 @@ export const uploadRecording = async (
 };
 
 // Get a download stream for a recording
-export const getRecordingStream = (fileId: string): Readable => {
+export const getRecordingStream = (fileId: string, start?: number): Readable => {
   if (!bucket) {
     throw new Error('GridFS not initialized');
   }
 
-  return bucket.openDownloadStream(new ObjectId(fileId));
+  // GridFS supports start option for range requests
+  const options: { start?: number } = {};
+  if (start !== undefined && start > 0) {
+    options.start = start;
+  }
+
+  return bucket.openDownloadStream(new ObjectId(fileId), options);
 };
 
 // Get recording info

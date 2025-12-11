@@ -2,12 +2,18 @@ import { Server, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import { CallSession } from '../models/CallSession';
+import { CallParticipant } from '../models/CallParticipant';
 import { Transcript } from '../models/Transcript';
 import { Notes } from '../models/Notes';
 import { Message } from '../models/Message';
 import { Conversation } from '../models/Conversation';
 import { Contact } from '../models/Contact';
-import { transcribeAudio, generateNotes } from '../services/openai';
+import { transcribeAudio, generateNotes, generateComprehensiveNotes, getOpenAI } from '../services/openai';
+import { User } from '../models/User';
+import { detectVisualConcept, generateImagePromptFromContext } from '../services/imageKeywordDetection';
+import { GeneratedImage } from '../models/GeneratedImage';
+import { generateImage, isStabilityConfigured } from '../services/stability';
+import { generateFreeImage, isFreeAIAvailable } from '../services/freeAI';
 
 interface AuthenticatedSocket extends Socket {
   userId?: string;
@@ -23,6 +29,7 @@ interface RoomState {
   callId?: string;
   transcriptBuffer: string;
   lastNotesUpdate: number;
+  lastImageGeneration?: number; // Track last auto-generation time for debouncing
   audioBuffer: Map<string, Buffer[]>;
 }
 
@@ -35,6 +42,8 @@ const onlineUsers = new Map<string, Set<string>>();
 const NOTES_UPDATE_INTERVAL = 30000;
 // Minimum transcript length for notes generation
 const MIN_TRANSCRIPT_FOR_NOTES = 100;
+// Image generation debounce (prevent too many generations)
+const IMAGE_GENERATION_DEBOUNCE = 30000; // 30 seconds between auto-generations
 
 export const setupSocketHandlers = (io: Server) => {
   // Authentication middleware
@@ -116,6 +125,45 @@ export const setupSocketHandlers = (io: Server) => {
       const callSession = await CallSession.findOne({ roomId });
       if (callSession) {
         room.callId = callSession._id.toString();
+        
+        // CRITICAL: Upsert participant record to prevent duplicates
+        // Use findOneAndUpdate with upsert to ensure unique (callId, userId) constraint
+        await CallParticipant.findOneAndUpdate(
+          { callId: callSession._id, userId: socket.userId },
+          {
+            $setOnInsert: {
+              callId: callSession._id,
+              userId: socket.userId!,
+              joinedAt: new Date(),
+            },
+            $set: {
+              leftAt: null, // Reset if user rejoins
+              duration: null,
+            },
+          },
+          {
+            upsert: true,
+            new: true,
+            setDefaultsOnInsert: true,
+          }
+        );
+        
+        // Also update guestIds array (deduplicate to prevent duplicates)
+        const userId = socket.userId!.toString();
+        const isHost = callSession.hostId.toString() === userId;
+        if (!isHost) {
+          const guestIdStrings = callSession.guestIds.map(id => id.toString());
+          if (!guestIdStrings.includes(userId)) {
+            callSession.guestIds.push(socket.userId! as any);
+            // Deduplicate guestIds array
+            const uniqueGuestIds = Array.from(
+              new Map(callSession.guestIds.map(id => [id.toString(), id])).values()
+            );
+            callSession.guestIds = uniqueGuestIds;
+            callSession.metadata.participantCount = callSession.guestIds.length + 1;
+            await callSession.save();
+          }
+        }
       }
 
       // Notify room of new participant
@@ -162,6 +210,12 @@ export const setupSocketHandlers = (io: Server) => {
     // WebRTC Signaling: Offer
     socket.on('signal:offer', (data: { targetId: string; offer: any }) => {
       const { targetId, offer } = data;
+      console.log('[SIGNALING] 📤 Forwarding offer:', {
+        from: socket.id,
+        fromUser: socket.userName,
+        to: targetId,
+        offerType: offer?.type,
+      });
       io.to(targetId).emit('signal:offer', {
         fromId: socket.id,
         userId: socket.userId,
@@ -173,6 +227,12 @@ export const setupSocketHandlers = (io: Server) => {
     // WebRTC Signaling: Answer
     socket.on('signal:answer', (data: { targetId: string; answer: any }) => {
       const { targetId, answer } = data;
+      console.log('[SIGNALING] 📥 Forwarding answer:', {
+        from: socket.id,
+        fromUser: socket.userName,
+        to: targetId,
+        answerType: answer?.type,
+      });
       io.to(targetId).emit('signal:answer', {
         fromId: socket.id,
         answer,
@@ -182,6 +242,19 @@ export const setupSocketHandlers = (io: Server) => {
     // WebRTC Signaling: ICE Candidate
     socket.on('signal:candidate', (data: { targetId: string; candidate: any }) => {
       const { targetId, candidate } = data;
+      if (candidate) {
+        console.log('[SIGNALING] 🧊 Forwarding ICE candidate:', {
+          from: socket.id,
+          to: targetId,
+          candidateType: candidate.type,
+          candidateProtocol: candidate.protocol,
+        });
+      } else {
+        console.log('[SIGNALING] 🧊 Forwarding null ICE candidate (end of candidates):', {
+          from: socket.id,
+          to: targetId,
+        });
+      }
       io.to(targetId).emit('signal:candidate', {
         fromId: socket.id,
         candidate,
@@ -267,31 +340,135 @@ export const setupSocketHandlers = (io: Server) => {
 
               console.log(`[TRANSCRIPT] Emitting transcript: ${segment.speaker}: ${segment.text}`);
 
-              // Save to database
+              // CRITICAL: Save to database IMMEDIATELY before emitting
               if (room.callId) {
-                await Transcript.findOneAndUpdate(
-                  { callId: room.callId },
-                  { 
-                    $push: { segments: segment },
-                  },
-                  { upsert: true }
-                );
+                try {
+                  const transcriptDoc = await Transcript.findOneAndUpdate(
+                    { callId: room.callId },
+                    { 
+                      $push: { segments: segment },
+                    },
+                    { 
+                      upsert: true,
+                      new: true,
+                      setDefaultsOnInsert: true,
+                    }
+                  );
+                  console.log('[TRANSCRIPT] ✅ Saved to database immediately:', {
+                    callId: room.callId,
+                    segmentCount: transcriptDoc?.segments?.length || 0,
+                    speaker: segment.speaker,
+                    textLength: segment.text.length,
+                  });
+                } catch (dbError: any) {
+                  console.error('[TRANSCRIPT] ❌ Database save error:', {
+                    error: dbError.message,
+                    callId: room.callId,
+                    segment: segment,
+                  });
+                  // Continue even if save fails - emit anyway so users see transcript
+                }
+              } else {
+                console.warn('[TRANSCRIPT] ⚠️ No callId, cannot save to database');
               }
 
               // Update transcript buffer for notes
               room.transcriptBuffer += `${segment.speaker}: ${segment.text}\n`;
 
-              // Emit to all participants
-              io.to(socket.roomId).emit('transcript:chunk', segment);
+      // CRITICAL: Emit to all participants in real-time
+      console.log('[TRANSCRIPT] 📤 Broadcasting transcript chunk to room:', {
+        roomId: socket.roomId,
+        participantCount: room.participants.size,
+        speaker: segment.speaker,
+        textPreview: segment.text.substring(0, 50) + '...',
+      });
+      io.to(socket.roomId).emit('transcript:chunk', segment);
+      console.log('[TRANSCRIPT] ✅ Broadcast complete');
 
-              // Check if we should update notes
-              const now = Date.now();
-              if (
-                now - room.lastNotesUpdate >= NOTES_UPDATE_INTERVAL &&
-                room.transcriptBuffer.length >= MIN_TRANSCRIPT_FOR_NOTES
-              ) {
-                room.lastNotesUpdate = now;
-                updateNotes(room, socket.roomId, io);
+      // Check if we should update notes
+      const now = Date.now();
+      if (
+        now - room.lastNotesUpdate >= NOTES_UPDATE_INTERVAL &&
+        room.transcriptBuffer.length >= MIN_TRANSCRIPT_FOR_NOTES
+      ) {
+        room.lastNotesUpdate = now;
+        updateNotes(room, socket.roomId, io);
+      }
+
+      // CRITICAL: Auto-detect visual concepts and generate images (for manual transcript too)
+      if (room.callId && room.callStarted) {
+        // Debounce: only check if enough time has passed since last generation
+        const lastGen = room.lastImageGeneration || 0;
+        if (now - lastGen >= IMAGE_GENERATION_DEBOUNCE) {
+          // Get recent transcript segments for context
+          const transcriptDoc = await Transcript.findOne({ callId: room.callId });
+          const recentSegments = transcriptDoc?.segments?.slice(-5) || [];
+          const recentTexts = recentSegments.map(s => s.text);
+          
+          // Detect visual concept
+          const detection = await detectVisualConcept(segment.text, recentTexts);
+          
+          if (detection.shouldGenerate && detection.confidence > 0.6) {
+            console.log('[IMAGE AUTO] 🎨 Visual concept detected in manual transcript!', {
+              text: segment.text.substring(0, 100),
+              confidence: detection.confidence,
+              prompt: detection.prompt?.substring(0, 100),
+            });
+            
+            // Update last generation time
+            room.lastImageGeneration = now;
+            
+            // Generate image asynchronously (don't block transcript)
+            generateImageFromTranscript(
+              room.callId,
+              detection.prompt || segment.text,
+              socket.userId!,
+              socket.userName || 'User',
+              io,
+              socket.roomId
+            ).catch((error) => {
+              console.error('[IMAGE AUTO] ❌ Auto-generation failed:', error);
+            });
+          }
+        }
+      }
+
+              // CRITICAL: Auto-detect visual concepts and generate images
+              if (room.callId && room.callStarted) {
+                // Debounce: only check if enough time has passed since last generation
+                const lastGen = room.lastImageGeneration || 0;
+                if (now - lastGen >= IMAGE_GENERATION_DEBOUNCE) {
+                  // Get recent transcript segments for context
+                  const transcriptDoc = await Transcript.findOne({ callId: room.callId });
+                  const recentSegments = transcriptDoc?.segments?.slice(-5) || [];
+                  const recentTexts = recentSegments.map(s => s.text);
+                  
+                  // Detect visual concept
+                  const detection = await detectVisualConcept(segment.text, recentTexts);
+                  
+                  if (detection.shouldGenerate && detection.confidence > 0.6) {
+                    console.log('[IMAGE AUTO] 🎨 Visual concept detected!', {
+                      text: segment.text.substring(0, 100),
+                      confidence: detection.confidence,
+                      prompt: detection.prompt?.substring(0, 100),
+                    });
+                    
+                    // Update last generation time
+                    room.lastImageGeneration = now;
+                    
+                    // Generate image asynchronously (don't block transcript)
+                    generateImageFromTranscript(
+                      room.callId,
+                      detection.prompt || segment.text,
+                      socket.userId!,
+                      socket.userName || 'User',
+                      io,
+                      socket.roomId
+                    ).catch((error) => {
+                      console.error('[IMAGE AUTO] ❌ Auto-generation failed:', error);
+                    });
+                  }
+                }
               }
             } else {
               console.log('[TRANSCRIPT] Empty or unavailable transcription result');
@@ -359,44 +536,60 @@ export const setupSocketHandlers = (io: Server) => {
         timestampSeconds,
       });
 
-      // Save to database
+      // CRITICAL: Save to database IMMEDIATELY before emitting
       if (room.callId) {
         try {
-          const result = await Transcript.findOneAndUpdate(
+          const transcriptDoc = await Transcript.findOneAndUpdate(
             { callId: room.callId },
-            { $push: { segments: segment } },
-            { upsert: true, new: true }
+            { 
+              $push: { segments: segment },
+            },
+            { 
+              upsert: true,
+              new: true,
+              setDefaultsOnInsert: true,
+            }
           );
-          console.log('[TRANSCRIPT] ✅ Saved to database, total segments:', result?.segments?.length || 0);
+          console.log('[TRANSCRIPT] ✅ Saved to database immediately:', {
+            callId: room.callId,
+            segmentCount: transcriptDoc?.segments?.length || 0,
+            speaker: segment.speaker,
+            speakerId: segment.speakerId,
+            textLength: segment.text.length,
+            timestamp: segment.timestamp,
+          });
         } catch (error: any) {
-          console.error('[TRANSCRIPT] ❌ Database save error:', error.message);
-          console.error('[TRANSCRIPT] Error stack:', error.stack);
+          console.error('[TRANSCRIPT] ❌ Database save error:', {
+            error: error.message,
+            stack: error.stack,
+            callId: room.callId,
+            segment: segment,
+          });
+          // Continue even if save fails - emit anyway so users see transcript
         }
       } else {
-        console.warn('[TRANSCRIPT] ⚠️ No callId, skipping database save');
+        console.warn('[TRANSCRIPT] ⚠️ No callId, cannot save to database');
       }
 
       room.transcriptBuffer += `${segment.speaker}: ${segment.text}\n`;
       console.log('[TRANSCRIPT] 📝 Updated transcript buffer, length:', room.transcriptBuffer.length);
 
-      // Emit to all participants in the room (including sender for confirmation)
-      console.log('[TRANSCRIPT] 📤 Emitting transcript:chunk to room:', socket.roomId);
-      console.log('[TRANSCRIPT] Segment details:', {
-        speaker: segment.speaker,
-        speakerId: segment.speakerId,
-        text: segment.text.substring(0, 50) + (segment.text.length > 50 ? '...' : ''),
-        timestamp: segment.timestamp,
+      // CRITICAL: Emit to all participants in real-time
+      console.log('[TRANSCRIPT] 📤 Broadcasting transcript chunk to room:', {
+        roomId: socket.roomId,
+        participantCount: room.participants.size,
+        participantSocketIds: Array.from(room.participants.keys()),
+        segment: {
+          speaker: segment.speaker,
+          speakerId: segment.speakerId,
+          textPreview: segment.text.substring(0, 100) + (segment.text.length > 100 ? '...' : ''),
+          textLength: segment.text.length,
+          timestamp: segment.timestamp,
+        },
       });
       
-      // Check how many participants should receive this (room already retrieved above)
-      const participantCount = room ? room.participants.size : 0;
-      console.log('[TRANSCRIPT] Room has', participantCount, 'participant(s)');
-      console.log('[TRANSCRIPT] Participant socket IDs:', Array.from(room.participants.keys()));
-      
-      // Emit to all in the room
-      const emitResult = io.to(socket.roomId).emit('transcript:chunk', segment);
-      console.log('[TRANSCRIPT] ✅ Emitted transcript chunk to all participants in room');
-      console.log('[TRANSCRIPT] Socket.IO emit result:', emitResult);
+      io.to(socket.roomId).emit('transcript:chunk', segment);
+      console.log('[TRANSCRIPT] ✅ Broadcast complete to all participants');
 
       // Update notes if enough content
       const now = Date.now();
@@ -544,12 +737,7 @@ async function handleLeaveRoom(socket: AuthenticatedSocket, io: Server) {
           }
           await callSession.save();
           
-          // Final notes update
-          if (room.transcriptBuffer.length >= MIN_TRANSCRIPT_FOR_NOTES) {
-            await updateNotes(room, socket.roomId, io, true);
-          }
-
-          // Update full transcript text
+          // Update full transcript text first
           const transcript = await Transcript.findOne({ callId: room.callId });
           if (transcript) {
             transcript.fullText = transcript.segments
@@ -557,6 +745,20 @@ async function handleLeaveRoom(socket: AuthenticatedSocket, io: Server) {
               .join('\n');
             transcript.wordCount = transcript.fullText.split(/\s+/).filter(w => w.length > 0).length;
             await transcript.save();
+          }
+          
+          // Generate comprehensive AI summary asynchronously (don't block call ending)
+          if (transcript && transcript.fullText && transcript.fullText.length > 50) {
+            console.log('[AI SUMMARY] 🚀 Starting comprehensive notes generation for call:', room.callId);
+            // Run asynchronously - don't await
+            generateComprehensivePostCallSummary(room.callId, callSession, transcript, io).catch((error) => {
+              console.error('[AI SUMMARY] ❌ Error generating comprehensive summary:', error);
+            });
+          } else {
+            // Fallback to basic notes if transcript is too short
+            if (room.transcriptBuffer.length >= MIN_TRANSCRIPT_FOR_NOTES) {
+              await updateNotes(room, socket.roomId, io, true);
+            }
           }
           
           // Attach call data to conversation if linked
@@ -804,6 +1006,317 @@ async function updateNotes(room: RoomState, roomId: string, io: Server, isFinal:
     }
   } catch (error) {
     console.error('Notes update error:', error);
+  }
+}
+
+/**
+ * Automatically generate image from transcript when visual concepts are detected
+ */
+async function generateImageFromTranscript(
+  callId: string,
+  prompt: string,
+  userId: string,
+  userName: string,
+  io: Server,
+  roomId: string
+) {
+  try {
+    console.log('[IMAGE AUTO] 🎨 Starting automatic image generation:', {
+      callId,
+      prompt: prompt.substring(0, 100),
+      userId,
+      userName,
+    });
+
+    // Emit that image generation started
+    io.to(roomId).emit('image:generating', {
+      prompt: prompt.substring(0, 100),
+      requestedBy: userName,
+      autoGenerated: true,
+    });
+
+    // Generate enhanced prompt from context
+    const enhancedPrompt = await generateImagePromptFromContext(prompt);
+    console.log('[IMAGE AUTO] 📝 Enhanced prompt:', enhancedPrompt.substring(0, 150));
+
+    // Get image generation services
+    const useFreeAI = isFreeAIAvailable();
+    const useStability = isStabilityConfigured();
+    const openai = getOpenAI();
+
+    let imageUrl: string;
+    let revisedPrompt: string = enhancedPrompt;
+
+    // Try free AI first (always available, no cost)
+    if (useFreeAI) {
+      console.log('[IMAGE AUTO] ✅ Using free Hugging Face AI');
+      try {
+        imageUrl = await generateFreeImage({
+          prompt: enhancedPrompt,
+          style: 'dream',
+          width: 512,
+          height: 512,
+        });
+      } catch (freeError: any) {
+        console.warn('[IMAGE AUTO] ⚠️ Free AI failed, trying fallback:', freeError);
+        // Fallback to Stability AI or OpenAI
+        if (useStability) {
+          imageUrl = await generateImage({
+            prompt: enhancedPrompt,
+            style: 'dream',
+            width: 1024,
+            height: 1024,
+            steps: 30,
+          });
+        } else if (openai) {
+          const response = await openai.images.generate({
+            model: 'dall-e-3',
+            prompt: `${enhancedPrompt}. Style: dreamlike, surreal, ethereal, magical atmosphere`,
+            n: 1,
+            size: '1024x1024',
+          });
+          imageUrl = response.data?.[0]?.url || '';
+          revisedPrompt = response.data?.[0]?.revised_prompt || enhancedPrompt;
+        } else {
+          throw new Error('No image generation service available');
+        }
+      }
+    } else if (useStability) {
+      imageUrl = await generateImage({
+        prompt: enhancedPrompt,
+        style: 'dream',
+        width: 1024,
+        height: 1024,
+        steps: 30,
+      });
+    } else if (openai) {
+      const response = await openai.images.generate({
+        model: 'dall-e-3',
+        prompt: `${enhancedPrompt}. Style: dreamlike, surreal, ethereal, magical atmosphere`,
+        n: 1,
+        size: '1024x1024',
+      });
+      imageUrl = response.data?.[0]?.url || '';
+      revisedPrompt = response.data?.[0]?.revised_prompt || enhancedPrompt;
+    } else {
+      throw new Error('No image generation service available');
+    }
+
+    if (!imageUrl) {
+      throw new Error('No image URL generated');
+    }
+
+    // Save to database
+    const generatedImage = new GeneratedImage({
+      callId,
+      creatorId: userId,
+      prompt: enhancedPrompt,
+      revisedPrompt,
+      imageUrl,
+      style: 'dream',
+      contextSource: 'auto_detected',
+      transcriptContext: prompt,
+      autoGenerated: true,
+    });
+    await generatedImage.save();
+
+    console.log('[IMAGE AUTO] ✅ Image generated and saved:', {
+      imageId: generatedImage._id,
+      callId,
+    });
+
+    // Emit to all participants in the room
+    io.to(roomId).emit('image:generated', {
+      image: generatedImage,
+      creator: userName,
+      autoGenerated: true,
+      fromTranscript: true,
+    });
+
+    console.log('[IMAGE AUTO] ✅ Image broadcasted to room:', roomId);
+  } catch (error: any) {
+    console.error('[IMAGE AUTO] ❌ Error generating image:', error);
+    // Emit error to room
+    io.to(roomId).emit('image:generation:error', {
+      error: error.message || 'Failed to generate image',
+      prompt: prompt.substring(0, 100),
+    });
+  }
+}
+
+// Generate comprehensive post-call AI summary with retry logic
+export async function generateComprehensivePostCallSummary(
+  callId: string,
+  callSession: any,
+  transcript: any,
+  io: Server
+) {
+  const MAX_RETRIES = 3;
+  const RETRY_DELAY = 2000; // 2 seconds
+  
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      console.log(`[AI SUMMARY] 📝 Attempt ${attempt}/${MAX_RETRIES} - Generating comprehensive notes for call ${callId}`);
+      
+      // Get participants
+      const host = await User.findById(callSession.hostId).select('name').lean();
+      const guests = await Promise.all(
+        (callSession.guestIds || []).map((id: any) => 
+          User.findById(id).select('name').lean()
+        )
+      );
+      
+      const participants = [
+        host?.name || 'Host',
+        ...guests.map((g: any) => g?.name || 'Guest').filter(Boolean)
+      ];
+      
+      // Get full transcript text
+      const transcriptText = transcript.fullText || transcript.segments
+        ?.map((s: any) => `${s.speaker || s.speakerName || 'Speaker'}: ${s.text}`)
+        .join('\n') || '';
+      
+      if (!transcriptText || transcriptText.length < 50) {
+        console.warn('[AI SUMMARY] ⚠️ Transcript too short, skipping comprehensive notes');
+        return;
+      }
+      
+      // Emit "generating" status to all participants
+      const allParticipants = [callSession.hostId, ...(callSession.guestIds || [])];
+      allParticipants.forEach((participantId) => {
+        io.to(`user:${participantId}`).emit('ai:summary:generating', {
+          callId,
+          status: 'generating',
+          message: 'Generating comprehensive meeting summary...',
+        });
+      });
+      
+      // Generate comprehensive notes using GPT-4
+      const comprehensiveNotes = await generateComprehensiveNotes(
+        transcriptText,
+        participants,
+        callSession.duration || 0,
+        callSession.startedAt || new Date()
+      );
+      
+      console.log('[AI SUMMARY] ✅ Comprehensive notes generated:', {
+        title: comprehensiveNotes.title,
+        summaryLength: comprehensiveNotes.summary?.length || 0,
+        actionItemsCount: comprehensiveNotes.actionItems?.length || 0,
+        decisionsCount: comprehensiveNotes.decisions?.length || 0,
+        sectionsCount: comprehensiveNotes.sections?.length || 0,
+      });
+      
+      // Convert to Notes model format
+      const notesData: any = {
+        callId: callSession._id,
+        title: comprehensiveNotes.title || 'Meeting Notes',
+        date: callSession.startedAt || new Date(),
+        duration: callSession.duration || 0,
+        participants: participants,
+        summary: comprehensiveNotes.summary || '',
+        sections: comprehensiveNotes.sections || [],
+        actionItems: (comprehensiveNotes.actionItems || []).map((item: any) => ({
+          text: item.item || item.text || item,
+          assignee: item.assignee || undefined,
+          completed: false,
+          dueDate: item.dueDate ? new Date(item.dueDate) : undefined,
+          priority: item.priority || 'medium',
+        })),
+        decisions: (comprehensiveNotes.decisions || []).map((decision: any) => ({
+          decision: typeof decision === 'string' ? decision : (decision.decision || decision),
+          context: typeof decision === 'object' ? (decision.context || '') : '',
+          timestamp: typeof decision === 'object' ? (decision.timestamp || '') : '',
+        })),
+        keyPoints: comprehensiveNotes.keyPoints || [],
+        questionsRaised: comprehensiveNotes.questionsRaised || [],
+        nextSteps: comprehensiveNotes.nextSteps || [],
+        suggestedFollowUp: comprehensiveNotes.suggestedFollowUp 
+          ? new Date(comprehensiveNotes.suggestedFollowUp) 
+          : undefined,
+        generatedAt: new Date(),
+        lastUpdatedAt: new Date(),
+        version: 1,
+        isEditable: true,
+        // Legacy fields for backward compatibility
+        bullets: comprehensiveNotes.keyPoints || [],
+        suggestedReplies: comprehensiveNotes.nextSteps || [],
+        keyTopics: comprehensiveNotes.sections?.map((s: any) => s.topic) || [],
+      };
+      
+      // Save to database
+      const savedNotes = await Notes.findOneAndUpdate(
+        { callId: callSession._id },
+        notesData,
+        { upsert: true, new: true }
+      );
+      
+      console.log('[AI SUMMARY] 💾 Comprehensive notes saved to database:', savedNotes._id);
+      
+      // Emit success to all participants
+      allParticipants.forEach((participantId) => {
+        io.to(`user:${participantId}`).emit('ai:summary:ready', {
+          callId,
+          status: 'ready',
+          notesId: savedNotes._id,
+          summary: comprehensiveNotes.summary,
+          title: comprehensiveNotes.title,
+          actionItemsCount: comprehensiveNotes.actionItems?.length || 0,
+          decisionsCount: comprehensiveNotes.decisions?.length || 0,
+        });
+      });
+      
+      // Emit comprehensive notes update
+      io.to(`call:${callId}`).emit('ai:notes:comprehensive', {
+        notes: savedNotes,
+        isFinal: true,
+        timestamp: Date.now(),
+      });
+      
+      console.log('[AI SUMMARY] ✅ Comprehensive summary generation completed successfully');
+      return; // Success - exit retry loop
+      
+    } catch (error: any) {
+      console.error(`[AI SUMMARY] ❌ Attempt ${attempt}/${MAX_RETRIES} failed:`, error.message);
+      
+      if (attempt === MAX_RETRIES) {
+        // Final attempt failed - emit error and fallback to basic notes
+        console.error('[AI SUMMARY] ❌ All retry attempts failed, falling back to basic notes');
+        
+        const allParticipants = [callSession.hostId, ...(callSession.guestIds || [])];
+        allParticipants.forEach((participantId) => {
+          io.to(`user:${participantId}`).emit('ai:summary:error', {
+            callId,
+            status: 'error',
+            message: 'Failed to generate comprehensive summary. Basic notes available.',
+          });
+        });
+        
+        // Fallback: try to generate basic notes
+        try {
+          const transcriptText = transcript.fullText || transcript.segments
+            ?.map((s: any) => `${s.speaker || s.speakerName || 'Speaker'}: ${s.text}`)
+            .join('\n') || '';
+          const basicNotes = await generateNotes(transcriptText || '');
+          await Notes.findOneAndUpdate(
+            { callId: callSession._id },
+            {
+              ...basicNotes,
+              callId: callSession._id,
+              generatedAt: new Date(),
+              lastUpdatedAt: new Date(),
+            },
+            { upsert: true }
+          );
+          console.log('[AI SUMMARY] ✅ Fallback basic notes generated');
+        } catch (fallbackError) {
+          console.error('[AI SUMMARY] ❌ Fallback notes generation also failed:', fallbackError);
+        }
+      } else {
+        // Wait before retrying
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * attempt));
+      }
+    }
   }
 }
 

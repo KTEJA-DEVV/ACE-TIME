@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/auth';
 import { useCallStore } from '../store/call';
@@ -15,6 +15,12 @@ export default function GlobalCallHandler() {
     isVideo: boolean;
     conversationId?: string;
   } | null>(null);
+  const incomingCallRef = useRef(incomingCall);
+  
+  // Keep ref in sync with state
+  useEffect(() => {
+    incomingCallRef.current = incomingCall;
+  }, [incomingCall]);
 
   // Initialize socket connection for call invitations
   useEffect(() => {
@@ -37,6 +43,14 @@ export default function GlobalCallHandler() {
       conversationId?: string;
     }) => {
       console.log('[CALL] Incoming call invitation:', data);
+      
+      // Prevent duplicate notifications - if we already have an incoming call, ignore this one
+      // (unless it's a different roomId, which shouldn't happen but just in case)
+      if (incomingCallRef.current && incomingCallRef.current.roomId === data.roomId) {
+        console.log('[CALL] Duplicate call invitation ignored:', data.roomId);
+        return;
+      }
+      
       setIncomingCall({
         roomId: data.roomId,
         callerName: data.callerName,

@@ -19,7 +19,7 @@ export interface ITranscript extends Document {
   updatedAt: Date;
 }
 
-const transcriptSegmentSchema = new Schema<ITranscriptSegment>(
+const transcriptSegmentSchema = new Schema(
   {
     speaker: {
       type: String,
@@ -85,6 +85,12 @@ transcriptSchema.pre('save', function (next) {
 
 // Text search index for searching transcripts
 transcriptSchema.index({ fullText: 'text' });
+
+// Performance indexes for fast queries
+transcriptSchema.index({ callId: 1 }); // Already indexed via unique, but explicit for clarity
+transcriptSchema.index({ 'segments.timestamp': 1 }); // For time-based queries
+transcriptSchema.index({ 'segments.speakerId': 1 }); // For speaker-based queries
+transcriptSchema.index({ createdAt: -1 }); // For recent transcripts
 
 export const Transcript = mongoose.model<ITranscript>('Transcript', transcriptSchema);
 

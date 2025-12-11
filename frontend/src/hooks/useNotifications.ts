@@ -33,31 +33,8 @@ export function useNotifications() {
       transports: ['websocket', 'polling'],
     });
 
-    // Incoming call notification
-    socket.on('call:invitation', (data: {
-      roomId: string;
-      callerId: string;
-      callerName: string;
-      isVideo: boolean;
-      conversationId?: string;
-    }) => {
-      addNotification({
-        type: 'incoming_call',
-        title: `Incoming ${data.isVideo ? 'Video' : 'Audio'} Call`,
-        message: `${data.callerName} is calling you`,
-        metadata: {
-          callerId: data.callerId,
-          callerName: data.callerName,
-          isVideo: data.isVideo,
-          callId: data.roomId,
-          conversationId: data.conversationId,
-        },
-        actionUrl: `/call/${data.roomId}`,
-        duration: 30000, // 30 seconds for calls
-        sound: true,
-        vibration: true,
-      });
-    });
+    // NOTE: Incoming call notifications are handled by GlobalCallHandler component
+    // to avoid duplicate notifications. This hook only handles other notification types.
 
     // New message notification
     socket.on('message:new', (data: { message: any }) => {

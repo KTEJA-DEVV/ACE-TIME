@@ -89,12 +89,34 @@ router.post(
 
     // Upload to GridFS - ensure video mime type
     const mimeType = req.file.mimetype || 'video/webm';
+    const filename = `recording-${id}-${Date.now()}.webm`;
+    
+    console.log('[RECORDING] 📤 Uploading recording to GridFS:', {
+      callId: id,
+      filename,
+      size: req.file.size,
+      mimeType,
+      userId,
+    });
+    
     const result = await uploadRecording(
       req.file.buffer,
-      `recording-${id}-${Date.now()}.webm`,
-      mimeType.startsWith('video/') ? mimeType : 'video/webm',
-      { callId: id, userId }
+      filename,
+      mimeType.startsWith('video/') || mimeType.startsWith('audio/') ? mimeType : 'video/webm',
+      { 
+        callId: id, 
+        userId,
+        duration: callSession.duration || 0,
+        size: req.file.size,
+        uploadDate: new Date(),
+        participants: [callSession.hostId, ...(callSession.guestIds || [])].map(p => p.toString()),
+      }
     );
+    
+    console.log('[RECORDING] ✅ Recording uploaded to GridFS:', {
+      fileId: result.fileId,
+      filename: result.filename,
+    });
 
     // Update call session with recording info
     callSession.recordingKey = result.fileId;
@@ -155,18 +177,61 @@ router.get(
     try {
       const fileInfo = await getRecordingInfo(callSession.recordingKey);
       if (!fileInfo) {
+        console.error('[RECORDING] ❌ Recording file not found in GridFS:', callSession.recordingKey);
         res.status(404).json({ error: 'Recording file not found' });
         return;
       }
-
-      res.set({
-        'Content-Type': fileInfo.contentType || 'video/webm',
-        'Content-Length': fileInfo.length?.toString(),
-        'Accept-Ranges': 'bytes',
+      
+      console.log('[RECORDING] 📥 Streaming recording:', {
+        fileId: callSession.recordingKey,
+        filename: fileInfo.filename,
+        contentType: fileInfo.contentType,
+        length: fileInfo.length,
       });
 
-      const downloadStream = getRecordingStream(callSession.recordingKey);
-      downloadStream.pipe(res);
+      // Handle range requests for video seeking (important for HTML5 video player)
+      const range = req.headers.range;
+      if (range && fileInfo.length) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileInfo.length - 1;
+        const chunksize = (end - start) + 1;
+        
+        res.status(206).set({
+          'Content-Range': `bytes ${start}-${end}/${fileInfo.length}`,
+          'Content-Length': chunksize.toString(),
+          'Content-Type': fileInfo.contentType || 'video/webm',
+          'Accept-Ranges': 'bytes',
+          'Cache-Control': 'private, no-cache',
+        });
+        
+        const downloadStream = getRecordingStream(callSession.recordingKey, start);
+        downloadStream.on('error', (error) => {
+          console.error('[RECORDING] Stream error:', error);
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Failed to stream recording' });
+          }
+        });
+        downloadStream.pipe(res);
+      } else {
+        // Full file stream (no range request)
+        res.set({
+          'Content-Type': fileInfo.contentType || 'video/webm',
+          'Content-Length': fileInfo.length?.toString() || '0',
+          'Accept-Ranges': 'bytes',
+          'Cache-Control': 'private, no-cache',
+          'Content-Disposition': `inline; filename="${fileInfo.filename || 'recording.webm'}"`,
+        });
+
+        const downloadStream = getRecordingStream(callSession.recordingKey);
+        downloadStream.on('error', (error) => {
+          console.error('[RECORDING] Stream error:', error);
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Failed to stream recording' });
+          }
+        });
+        downloadStream.pipe(res);
+      }
     } catch (error) {
       console.error('Error streaming recording:', error);
       res.status(500).json({ error: 'Failed to stream recording' });
@@ -229,6 +294,59 @@ router.get(
     const notes = await Notes.findOne({ callId: id });
     
     res.json({ notes });
+  })
+);
+
+// POST /api/calls/:id/generate-comprehensive-notes - Manually trigger comprehensive notes generation
+router.post(
+  '/:id/generate-comprehensive-notes',
+  authenticate,
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+
+    const callSession = await CallSession.findById(id);
+    if (!callSession) {
+      res.status(404).json({ error: 'Call not found' });
+      return;
+    }
+
+    // Check access
+    const userId = req.userId!;
+    const isHost = callSession.hostId.toString() === userId;
+    const isGuest = callSession.guestIds.some(g => g.toString() === userId);
+
+    if (!isHost && !isGuest) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
+
+    // Check if call has ended
+    if (callSession.status !== 'ended') {
+      res.status(400).json({ error: 'Call must be ended before generating comprehensive notes' });
+      return;
+    }
+
+    // Get transcript
+    const transcript = await Transcript.findOne({ callId: id });
+    if (!transcript || !transcript.fullText) {
+      res.status(404).json({ error: 'Transcript not found or empty' });
+      return;
+    }
+
+    // Start generation asynchronously
+    const io = req.app.get('io');
+    if (io) {
+      // Import the function (avoid circular dependency)
+      const { generateComprehensivePostCallSummary } = await import('../socket/index');
+      generateComprehensivePostCallSummary(id, callSession, transcript, io).catch((error) => {
+        console.error('[API] Error generating comprehensive notes:', error);
+      });
+    }
+
+    res.json({ 
+      message: 'Comprehensive notes generation started',
+      status: 'processing',
+    });
   })
 );
 

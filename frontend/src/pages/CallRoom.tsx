@@ -1490,13 +1490,13 @@ export default function CallRoom() {
                     >
                       <div 
                         className="relative cursor-pointer"
-                        onClick={() => window.open(img.imageUrl, '_blank')}
-                      >
-                        <img
-                          src={img.imageUrl}
-                          alt={img.prompt}
-                          className="w-full h-32 object-cover"
-                        />
+                      onClick={() => window.open(img.imageUrl, '_blank')}
+                    >
+                      <img
+                        src={img.imageUrl}
+                        alt={img.prompt}
+                        className="w-full h-32 object-cover"
+                      />
                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all flex items-center justify-center opacity-0 group-hover:opacity-100">
                           <span className="text-white text-xs font-medium">Click to view</span>
                         </div>
@@ -2765,12 +2765,11 @@ export default function CallRoom() {
             onClick={handleVideoTap}
             style={{ paddingTop: '48px', paddingBottom: '80px' }} // Space for tabs and controls
           >
-            {/* Call Controls - Show during active/waiting call on call screen */}
-            {/* Show controls when: call is active or waiting, on call screen, not showing bottom sheet */}
+            {/* Call Controls - Show during active/waiting call on ALL tabs */}
+            {/* Show controls when: call is active or waiting, regardless of active tab */}
             {(callStatus === 'active' || callStatus === 'waiting') && 
-             activeRightTab === 'dreamweaving' &&
              !showBottomSheet && (
-              <div className="absolute bottom-6 sm:bottom-8 left-1/2 transform -translate-x-1/2 z-[50] pointer-events-auto">
+              <div className="fixed bottom-6 sm:bottom-8 left-1/2 transform -translate-x-1/2 z-[50] pointer-events-auto">
                 <CallControls
                   isMuted={isMuted}
                   isVideoOff={isVideoOff}
@@ -2786,76 +2785,213 @@ export default function CallRoom() {
             )}
             {/* Always show local video, even when alone */}
             {(() => {
-              // Include AI as a participant (always present)
-              const totalParticipants = participants.length + 1 + 1; // +1 for local user, +1 for AI
-              let gridCols = '1fr';
-              let gridRows = '1fr';
-              
-              // Determine grid layout based on total participants (including AI)
-              if (totalParticipants === 1) {
-                // Just AI (shouldn't happen, but handle it)
-                gridCols = '1fr';
-                gridRows = '1fr';
-              } else if (totalParticipants === 2) {
-                // 1 human + AI
-                gridCols = 'repeat(2, 1fr)';
-                gridRows = '1fr';
-              } else if (totalParticipants === 3) {
-                // 2 humans + AI - Perfect 3-grid layout
-                gridCols = 'repeat(3, 1fr)';
-                gridRows = '1fr';
-              } else if (totalParticipants === 4) {
-                // 3 humans + AI
-                gridCols = 'repeat(2, 1fr)';
-                gridRows = 'repeat(2, 1fr)';
-              } else {
-                // 4+ humans + AI
-                gridCols = 'repeat(3, 1fr)';
-                gridRows = 'repeat(3, 1fr)';
-              }
-              
               // Determine if AI is speaking or thinking
               // AI is "speaking" when there's an interim transcript (AI is generating)
               // AI is "thinking" when AI notes are being updated
               const isAISpeaking = !!interimTranscript && interimTranscript.trim().length > 0;
               const isAIThinking = !!aiNotes && !isAISpeaking;
               
-              // Responsive grid classes
-              const getGridClasses = () => {
-                if (totalParticipants <= 2) {
-                  return 'grid-cols-1 sm:grid-cols-2';
-                } else if (totalParticipants === 3) {
-                  return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
-                } else if (totalParticipants === 4) {
-                  return 'grid-cols-1 sm:grid-cols-2';
+              // Calculate actual participant count (excluding AI for grid logic)
+              const actualParticipantCount = participants.length + 1; // +1 for local user
+              const isAlone = actualParticipantCount === 1;
+              const isTwoParticipants = actualParticipantCount === 2;
+
+              // Responsive grid configuration
+              const getGridConfig = () => {
+                const width = window.innerWidth;
+                const isDesktop = width >= 1024;
+                
+                // Special case: 1 participant (alone)
+                if (isAlone) {
+                  if (width < 640) {
+                    // Mobile: centered single tile
+                    return {
+                      gridCols: '1fr',
+                      gridRows: '1fr',
+                      containerClass: 'grid-cols-1 justify-items-center',
+                      maxWidth: '100%',
+                    };
+                  } else {
+                    // Desktop: centered square tile
+                    return {
+                      gridCols: '1fr',
+                      gridRows: '1fr',
+                      containerClass: 'flex justify-center items-center',
+                      maxWidth: width >= 1024 ? '600px' : '100%',
+                    };
+                  }
+                }
+                
+                // Desktop: Optimize grid based on participant count for equal-sized tiles
+                if (isDesktop) {
+                  if (isTwoParticipants) {
+                    // 2 participants: 2 columns, 1 row
+                    return {
+                      gridCols: 'repeat(2, 1fr)',
+                      gridRows: '1fr',
+                      containerClass: 'grid-cols-2',
+                    };
+                  } else if (actualParticipantCount === 3) {
+                    // 3 participants: 3 columns, 1 row
+                    return {
+                      gridCols: 'repeat(3, 1fr)',
+                      gridRows: '1fr',
+                      containerClass: 'grid-cols-3',
+                    };
+                  } else if (actualParticipantCount === 4) {
+                    // 4 participants: 2x2 grid
+                    return {
+                      gridCols: 'repeat(2, 1fr)',
+                      gridRows: 'repeat(2, 1fr)',
+                      containerClass: 'grid-cols-2',
+                    };
+                  } else if (actualParticipantCount === 5 || actualParticipantCount === 6) {
+                    // 5-6 participants: 3 columns, 2 rows
+                    return {
+                      gridCols: 'repeat(3, 1fr)',
+                      gridRows: 'repeat(2, 1fr)',
+                      containerClass: 'grid-cols-3',
+                    };
+                  } else if (actualParticipantCount >= 7 && actualParticipantCount <= 9) {
+                    // 7-9 participants: 3x3 grid
+                    return {
+                      gridCols: 'repeat(3, 1fr)',
+                      gridRows: 'repeat(3, 1fr)',
+                      containerClass: 'grid-cols-3',
+                    };
+                  } else {
+                    // 10+ participants: 4 columns, calculate rows needed
+                    const rowsNeeded = Math.ceil(actualParticipantCount / 4);
+                    return {
+                      gridCols: 'repeat(4, 1fr)',
+                      gridRows: `repeat(${rowsNeeded}, 1fr)`,
+                      containerClass: 'grid-cols-4',
+                    };
+                  }
+                }
+                
+                // Mobile/Tablet: Optimize grid based on participant count for square tiles
+                if (width < 640) {
+                  // Mobile: Optimize grid based on participant count for equal-sized square tiles
+                  if (isTwoParticipants) {
+                    // 2 participants: 2 columns, 1 row
+                    return {
+                      gridCols: 'repeat(2, 1fr)',
+                      gridRows: '1fr',
+                      containerClass: 'grid-cols-2',
+                    };
+                  } else if (actualParticipantCount === 3) {
+                    // 3 participants: 2 columns, 2 rows
+                    return {
+                      gridCols: 'repeat(2, 1fr)',
+                      gridRows: 'repeat(2, 1fr)',
+                      containerClass: 'grid-cols-2',
+                    };
+                  } else if (actualParticipantCount === 4) {
+                    // 4 participants: 2x2 grid
+                    return {
+                      gridCols: 'repeat(2, 1fr)',
+                      gridRows: 'repeat(2, 1fr)',
+                      containerClass: 'grid-cols-2',
+                    };
+                  } else if (actualParticipantCount === 5 || actualParticipantCount === 6) {
+                    // 5-6 participants: 2 columns, 3 rows
+                    return {
+                      gridCols: 'repeat(2, 1fr)',
+                      gridRows: 'repeat(3, 1fr)',
+                      containerClass: 'grid-cols-2',
+                    };
+                  } else {
+                    // 7+ participants: Calculate rows needed (2 columns, ceil(participants/2) rows)
+                    const rowsNeeded = Math.ceil(actualParticipantCount / 2);
+                    return {
+                      gridCols: 'repeat(2, 1fr)',
+                      gridRows: `repeat(${rowsNeeded}, 1fr)`,
+                      containerClass: 'grid-cols-2',
+                    };
+                  }
                 } else {
-                  return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
+                  // Tablet: Similar to mobile but can fit more
+                  if (isTwoParticipants) {
+                    // 2 participants: 2 columns
+                    return {
+                      gridCols: 'repeat(2, 1fr)',
+                      gridRows: '1fr',
+                      containerClass: 'grid-cols-1 sm:grid-cols-2',
+                    };
+                  } else if (actualParticipantCount === 3) {
+                    // 3 participants: 3 columns, 1 row
+                    return {
+                      gridCols: 'repeat(3, 1fr)',
+                      gridRows: '1fr',
+                      containerClass: 'grid-cols-2 sm:grid-cols-3',
+                    };
+                  } else if (actualParticipantCount === 4) {
+                    // 4 participants: 2x2 grid
+                    return {
+                      gridCols: 'repeat(2, 1fr)',
+                      gridRows: 'repeat(2, 1fr)',
+                      containerClass: 'grid-cols-1 sm:grid-cols-2',
+                    };
+                  } else if (actualParticipantCount >= 5 && actualParticipantCount <= 6) {
+                    // 5-6 participants: 3 columns, 2 rows
+                    return {
+                      gridCols: 'repeat(3, 1fr)',
+                      gridRows: 'repeat(2, 1fr)',
+                      containerClass: 'grid-cols-2 sm:grid-cols-3',
+                    };
+                  } else {
+                    // 7+ participants: 3 columns, calculate rows needed
+                    const rowsNeeded = Math.ceil(actualParticipantCount / 3);
+                    return {
+                      gridCols: 'repeat(3, 1fr)',
+                      gridRows: `repeat(${rowsNeeded}, 1fr)`,
+                      containerClass: 'grid-cols-2 sm:grid-cols-3',
+                    };
+                  }
                 }
               };
 
+              const gridConfig = getGridConfig();
+              
               return (
-                <div className={`w-full h-full grid gap-2 sm:gap-3 p-2 sm:p-3 relative ${getGridClasses()}`} style={{
-                  gridTemplateColumns: window.innerWidth < 640 ? '1fr' : (window.innerWidth < 1024 && totalParticipants > 2 ? 'repeat(2, 1fr)' : gridCols),
-                  gridTemplateRows: window.innerWidth < 640 ? 'repeat(auto-fit, minmax(160px, 1fr))' : gridRows,
-                }}>
+                <div 
+                  className={`w-full h-full grid gap-1 sm:gap-3 md:gap-4 p-2 sm:p-4 md:p-6 relative ${gridConfig.containerClass}`}
+                  style={{
+                    display: 'grid', // Explicit grid display
+                    gridTemplateColumns: gridConfig.gridCols,
+                    gridTemplateRows: gridConfig.gridRows || '1fr',
+                    gridAutoRows: '1fr', // Ensure all auto rows are equal height
+                    maxWidth: gridConfig.maxWidth || '100%',
+                    margin: isAlone && window.innerWidth >= 640 ? '0 auto' : '0',
+                    alignItems: 'stretch',
+                    justifyItems: 'stretch', // Stretch to fill grid cells
+                    width: '100%',
+                    height: '100%',
+                    boxSizing: 'border-box',
+                  }}
+                >
                   {/* Remote participants */}
                   {participants.map((participant) => {
                     const participantData = participantStreams.get(participant.socketId);
+                    // Use stable key: prefer userId if available, fallback to socketId
+                    const stableKey = participant.userId || participant.socketId;
                     return (
                       <VideoParticipant
-                        key={participant.socketId}
+                        key={stableKey}
                         stream={participantData?.stream || (participants.indexOf(participant) === 0 ? remoteStream : null)}
                         userName={participant.userName}
                         userId={participant.userId}
                         isVideoOff={participantData?.isVideoOff || false}
                         isMuted={participantData?.isMuted || false}
-                        className="min-h-[180px] sm:min-h-0"
+                        className="w-full max-w-full"
                       />
                     );
                   })}
                   
                   {/* Local user (ALWAYS shown) */}
                   <VideoParticipant
+                    key={user?._id || 'local-user'}
                     stream={localStream}
                     userName={user?.name || 'You'}
                     userId={user?._id}
@@ -2863,14 +2999,15 @@ export default function CallRoom() {
                     isVideoOff={isVideoOff}
                     isMuted={isMuted}
                     isLocal={true}
-                    className="min-h-[160px] sm:min-h-0"
+                    className="w-full max-w-full"
                   />
                   
                   {/* AI Participant (ALWAYS shown as third participant) */}
                   <AIParticipant
+                    key="ai-participant"
                     isSpeaking={isAISpeaking}
                     isThinking={isAIThinking}
-                    className="min-h-[160px] sm:min-h-0"
+                    className="w-full max-w-full"
                   />
                   
                   {/* Waiting message overlay (only when alone with AI) - Moved up significantly to avoid button overlap */}
@@ -2886,12 +3023,11 @@ export default function CallRoom() {
               );
             })()}
 
-            {/* Call Controls - Show during active/waiting call on call screen (Mobile) */}
-            {/* Show controls when: call is active or waiting, on call screen, not showing bottom sheet */}
+            {/* Call Controls - Show during active/waiting call on ALL tabs (Mobile) */}
+            {/* Show controls when: call is active or waiting, regardless of active tab */}
             {(callStatus === 'active' || callStatus === 'waiting') && 
-             activeRightTab === 'dreamweaving' &&
              !showBottomSheet && (
-              <div className="absolute bottom-6 sm:bottom-8 left-1/2 transform -translate-x-1/2 z-[50] pointer-events-auto">
+              <div className="fixed bottom-6 sm:bottom-8 left-1/2 transform -translate-x-1/2 z-[50] pointer-events-auto">
                 <CallControls
                   isMuted={isMuted}
                   isVideoOff={isVideoOff}
@@ -3200,76 +3336,213 @@ export default function CallRoom() {
           <div className="flex-1 relative bg-dark-900 min-h-0 overflow-hidden">
             {/* Always show local video, even when alone */}
             {(() => {
-              // Include AI as a participant (always present)
-              const totalParticipants = participants.length + 1 + 1; // +1 for local user, +1 for AI
-              let gridCols = '1fr';
-              let gridRows = '1fr';
-              
-              // Determine grid layout based on total participants (including AI)
-              if (totalParticipants === 1) {
-                // Just AI (shouldn't happen, but handle it)
-                gridCols = '1fr';
-                gridRows = '1fr';
-              } else if (totalParticipants === 2) {
-                // 1 human + AI
-                gridCols = 'repeat(2, 1fr)';
-                gridRows = '1fr';
-              } else if (totalParticipants === 3) {
-                // 2 humans + AI - Perfect 3-grid layout
-                gridCols = 'repeat(3, 1fr)';
-                gridRows = '1fr';
-              } else if (totalParticipants === 4) {
-                // 3 humans + AI
-                gridCols = 'repeat(2, 1fr)';
-                gridRows = 'repeat(2, 1fr)';
-              } else {
-                // 4+ humans + AI
-                gridCols = 'repeat(3, 1fr)';
-                gridRows = 'repeat(3, 1fr)';
-              }
-              
               // Determine if AI is speaking or thinking
               // AI is "speaking" when there's an interim transcript (AI is generating)
               // AI is "thinking" when AI notes are being updated
               const isAISpeaking = !!interimTranscript && interimTranscript.trim().length > 0;
               const isAIThinking = !!aiNotes && !isAISpeaking;
               
-              // Responsive grid classes
-              const getGridClasses = () => {
-                if (totalParticipants <= 2) {
-                  return 'grid-cols-1 sm:grid-cols-2';
-                } else if (totalParticipants === 3) {
-                  return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
-                } else if (totalParticipants === 4) {
-                  return 'grid-cols-1 sm:grid-cols-2';
+              // Calculate actual participant count (excluding AI for grid logic)
+              const actualParticipantCount = participants.length + 1; // +1 for local user
+              const isAlone = actualParticipantCount === 1;
+              const isTwoParticipants = actualParticipantCount === 2;
+
+              // Responsive grid configuration
+              const getGridConfig = () => {
+                const width = window.innerWidth;
+                const isDesktop = width >= 1024;
+                
+                // Special case: 1 participant (alone)
+                if (isAlone) {
+                  if (width < 640) {
+                    // Mobile: centered single tile
+                    return {
+                      gridCols: '1fr',
+                      gridRows: '1fr',
+                      containerClass: 'grid-cols-1 justify-items-center',
+                      maxWidth: '100%',
+                    };
+                  } else {
+                    // Desktop: centered square tile
+                    return {
+                      gridCols: '1fr',
+                      gridRows: '1fr',
+                      containerClass: 'flex justify-center items-center',
+                      maxWidth: width >= 1024 ? '600px' : '100%',
+                    };
+                  }
+                }
+                
+                // Desktop: Optimize grid based on participant count for equal-sized tiles
+                if (isDesktop) {
+                  if (isTwoParticipants) {
+                    // 2 participants: 2 columns, 1 row
+                    return {
+                      gridCols: 'repeat(2, 1fr)',
+                      gridRows: '1fr',
+                      containerClass: 'grid-cols-2',
+                    };
+                  } else if (actualParticipantCount === 3) {
+                    // 3 participants: 3 columns, 1 row
+                    return {
+                      gridCols: 'repeat(3, 1fr)',
+                      gridRows: '1fr',
+                      containerClass: 'grid-cols-3',
+                    };
+                  } else if (actualParticipantCount === 4) {
+                    // 4 participants: 2x2 grid
+                    return {
+                      gridCols: 'repeat(2, 1fr)',
+                      gridRows: 'repeat(2, 1fr)',
+                      containerClass: 'grid-cols-2',
+                    };
+                  } else if (actualParticipantCount === 5 || actualParticipantCount === 6) {
+                    // 5-6 participants: 3 columns, 2 rows
+                    return {
+                      gridCols: 'repeat(3, 1fr)',
+                      gridRows: 'repeat(2, 1fr)',
+                      containerClass: 'grid-cols-3',
+                    };
+                  } else if (actualParticipantCount >= 7 && actualParticipantCount <= 9) {
+                    // 7-9 participants: 3x3 grid
+                    return {
+                      gridCols: 'repeat(3, 1fr)',
+                      gridRows: 'repeat(3, 1fr)',
+                      containerClass: 'grid-cols-3',
+                    };
+                  } else {
+                    // 10+ participants: 4 columns, calculate rows needed
+                    const rowsNeeded = Math.ceil(actualParticipantCount / 4);
+                    return {
+                      gridCols: 'repeat(4, 1fr)',
+                      gridRows: `repeat(${rowsNeeded}, 1fr)`,
+                      containerClass: 'grid-cols-4',
+                    };
+                  }
+                }
+                
+                // Mobile/Tablet: Optimize grid based on participant count for square tiles
+                if (width < 640) {
+                  // Mobile: Optimize grid based on participant count for equal-sized square tiles
+                  if (isTwoParticipants) {
+                    // 2 participants: 2 columns, 1 row
+                    return {
+                      gridCols: 'repeat(2, 1fr)',
+                      gridRows: '1fr',
+                      containerClass: 'grid-cols-2',
+                    };
+                  } else if (actualParticipantCount === 3) {
+                    // 3 participants: 2 columns, 2 rows
+                    return {
+                      gridCols: 'repeat(2, 1fr)',
+                      gridRows: 'repeat(2, 1fr)',
+                      containerClass: 'grid-cols-2',
+                    };
+                  } else if (actualParticipantCount === 4) {
+                    // 4 participants: 2x2 grid
+                    return {
+                      gridCols: 'repeat(2, 1fr)',
+                      gridRows: 'repeat(2, 1fr)',
+                      containerClass: 'grid-cols-2',
+                    };
+                  } else if (actualParticipantCount === 5 || actualParticipantCount === 6) {
+                    // 5-6 participants: 2 columns, 3 rows
+                    return {
+                      gridCols: 'repeat(2, 1fr)',
+                      gridRows: 'repeat(3, 1fr)',
+                      containerClass: 'grid-cols-2',
+                    };
+                  } else {
+                    // 7+ participants: Calculate rows needed (2 columns, ceil(participants/2) rows)
+                    const rowsNeeded = Math.ceil(actualParticipantCount / 2);
+                    return {
+                      gridCols: 'repeat(2, 1fr)',
+                      gridRows: `repeat(${rowsNeeded}, 1fr)`,
+                      containerClass: 'grid-cols-2',
+                    };
+                  }
                 } else {
-                  return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
+                  // Tablet: Similar to mobile but can fit more
+                  if (isTwoParticipants) {
+                    // 2 participants: 2 columns
+                    return {
+                      gridCols: 'repeat(2, 1fr)',
+                      gridRows: '1fr',
+                      containerClass: 'grid-cols-1 sm:grid-cols-2',
+                    };
+                  } else if (actualParticipantCount === 3) {
+                    // 3 participants: 3 columns, 1 row
+                    return {
+                      gridCols: 'repeat(3, 1fr)',
+                      gridRows: '1fr',
+                      containerClass: 'grid-cols-2 sm:grid-cols-3',
+                    };
+                  } else if (actualParticipantCount === 4) {
+                    // 4 participants: 2x2 grid
+                    return {
+                      gridCols: 'repeat(2, 1fr)',
+                      gridRows: 'repeat(2, 1fr)',
+                      containerClass: 'grid-cols-1 sm:grid-cols-2',
+                    };
+                  } else if (actualParticipantCount >= 5 && actualParticipantCount <= 6) {
+                    // 5-6 participants: 3 columns, 2 rows
+                    return {
+                      gridCols: 'repeat(3, 1fr)',
+                      gridRows: 'repeat(2, 1fr)',
+                      containerClass: 'grid-cols-2 sm:grid-cols-3',
+                    };
+                  } else {
+                    // 7+ participants: 3 columns, calculate rows needed
+                    const rowsNeeded = Math.ceil(actualParticipantCount / 3);
+                    return {
+                      gridCols: 'repeat(3, 1fr)',
+                      gridRows: `repeat(${rowsNeeded}, 1fr)`,
+                      containerClass: 'grid-cols-2 sm:grid-cols-3',
+                    };
+                  }
                 }
               };
 
+              const gridConfig = getGridConfig();
+              
               return (
-                <div className={`w-full h-full grid gap-2 sm:gap-3 p-2 sm:p-3 relative ${getGridClasses()}`} style={{
-                  gridTemplateColumns: window.innerWidth < 640 ? '1fr' : (window.innerWidth < 1024 && totalParticipants > 2 ? 'repeat(2, 1fr)' : gridCols),
-                  gridTemplateRows: window.innerWidth < 640 ? 'repeat(auto-fit, minmax(160px, 1fr))' : gridRows,
-                }}>
+                <div 
+                  className={`w-full h-full grid gap-1 sm:gap-3 md:gap-4 p-2 sm:p-4 md:p-6 relative ${gridConfig.containerClass}`}
+                  style={{
+                    display: 'grid', // Explicit grid display
+                    gridTemplateColumns: gridConfig.gridCols,
+                    gridTemplateRows: gridConfig.gridRows || '1fr',
+                    gridAutoRows: '1fr', // Ensure all auto rows are equal height
+                    maxWidth: gridConfig.maxWidth || '100%',
+                    margin: isAlone && window.innerWidth >= 640 ? '0 auto' : '0',
+                    alignItems: 'stretch',
+                    justifyItems: 'stretch', // Stretch to fill grid cells
+                    width: '100%',
+                    height: '100%',
+                    boxSizing: 'border-box',
+                  }}
+                >
                   {/* Remote participants */}
                   {participants.map((participant) => {
                     const participantData = participantStreams.get(participant.socketId);
+                    // Use stable key: prefer userId if available, fallback to socketId
+                    const stableKey = participant.userId || participant.socketId;
                     return (
                       <VideoParticipant
-                        key={participant.socketId}
+                        key={stableKey}
                         stream={participantData?.stream || (participants.indexOf(participant) === 0 ? remoteStream : null)}
                         userName={participant.userName}
                         userId={participant.userId}
                         isVideoOff={participantData?.isVideoOff || false}
                         isMuted={participantData?.isMuted || false}
-                        className="min-h-[180px] sm:min-h-0"
+                        className="w-full max-w-full"
                       />
                     );
                   })}
                   
                   {/* Local user (ALWAYS shown) */}
                   <VideoParticipant
+                    key={user?._id || 'local-user'}
                     stream={localStream}
                     userName={user?.name || 'You'}
                     userId={user?._id}
@@ -3277,14 +3550,15 @@ export default function CallRoom() {
                     isVideoOff={isVideoOff}
                     isMuted={isMuted}
                     isLocal={true}
-                    className="min-h-[160px] sm:min-h-0"
+                    className="w-full max-w-full"
                   />
                   
                   {/* AI Participant (ALWAYS shown as third participant) */}
                   <AIParticipant
+                    key="ai-participant"
                     isSpeaking={isAISpeaking}
                     isThinking={isAIThinking}
-                    className="min-h-[160px] sm:min-h-0"
+                    className="w-full max-w-full"
                   />
                   
                   {/* Waiting message overlay (only when alone with AI) - Moved up significantly to avoid button overlap */}
@@ -3300,23 +3574,22 @@ export default function CallRoom() {
               );
             })()}
 
-            {/* Call Controls - Show during active/waiting call on call screen (Desktop) */}
-            {/* Show controls when: call is active or waiting, on call screen */}
-            {(callStatus === 'active' || callStatus === 'waiting') && 
-             activeRightTab === 'dreamweaving' && (
-              <div className="absolute bottom-6 sm:bottom-8 left-1/2 transform -translate-x-1/2 z-[50] pointer-events-auto">
-                <CallControls
-                  isMuted={isMuted}
-                  isVideoOff={isVideoOff}
-                  onToggleMute={toggleMute}
-                  onToggleVideo={toggleVideo}
-                  onEndCall={handleEndCall}
-                  onScreenShare={handleScreenShare}
-                  onAddParticipant={handleAddParticipant}
-                  onSettings={handleSettings}
-                  isScreenSharing={isScreenSharing}
-                />
-              </div>
+            {/* Call Controls - Show during active/waiting call on ALL tabs (Desktop) */}
+            {/* Show controls when: call is active or waiting, regardless of active tab */}
+            {(callStatus === 'active' || callStatus === 'waiting') && (
+              <div className="fixed bottom-6 sm:bottom-8 left-1/2 transform -translate-x-1/2 z-[50] pointer-events-auto">
+              <CallControls
+                isMuted={isMuted}
+                isVideoOff={isVideoOff}
+                onToggleMute={toggleMute}
+                onToggleVideo={toggleVideo}
+                onEndCall={handleEndCall}
+                onScreenShare={handleScreenShare}
+                onAddParticipant={handleAddParticipant}
+                onSettings={handleSettings}
+                isScreenSharing={isScreenSharing}
+              />
+            </div>
             )}
 
           </div>

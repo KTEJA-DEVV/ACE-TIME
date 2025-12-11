@@ -173,18 +173,18 @@ export default function VideoParticipant({
                   if (retries > 0) {
                     console.log('[VIDEO PARTICIPANT] 🔄 Retrying play, attempts left:', retries);
                     return new Promise((resolve) => {
-                      setTimeout(() => {
+                  setTimeout(() => {
                         attemptPlay(retries - 1).then(resolve).catch(resolve);
                       }, 200);
                     });
                   } else {
                     console.error('[VIDEO PARTICIPANT] ❌ All play attempts failed');
-                  }
+                    }
                 });
             };
             
             attemptPlay();
-          }
+            }
         });
       } else {
         // Stream already attached, ensure it's playing
@@ -286,7 +286,19 @@ export default function VideoParticipant({
   const showPlaceholder = isVideoOff || !stream || !hasVideoTrack || !isVideoPlaying;
 
   return (
-    <div className={`relative bg-dark-900 rounded-xl overflow-hidden min-h-[180px] sm:min-h-0 ${className}`} style={{ aspectRatio: '16/9' }}>
+    <div 
+      className={`relative bg-dark-900 rounded-xl overflow-hidden ${className}`} 
+      style={{ 
+        aspectRatio: '1/1', // Square tiles on all screen sizes
+        minWidth: '0', // Allow tiles to shrink
+        minHeight: '0', // Allow tiles to shrink vertically
+        width: '100%', // Full width of grid cell
+        maxWidth: '100%',
+        height: '100%', // Full height of grid cell
+        maxHeight: '100%',
+        borderRadius: '12px',
+      }}
+    >
       {/* Speaking Border - Green glow when speaking */}
       <SpeakingBorder isSpeaking={isSpeaking && !isMuted} />
 
@@ -297,10 +309,15 @@ export default function VideoParticipant({
         playsInline
         webkit-playsinline="true"
         muted={isLocal}
-        className={`w-full h-full object-cover transition-opacity duration-300 ${
+        className={`w-full h-full transition-opacity duration-300 ${
           showPlaceholder ? 'opacity-0 absolute inset-0' : 'opacity-100'
         }`}
-        style={isLocal ? { transform: 'scaleX(-1)' } : {}}
+        style={{
+          objectFit: 'cover',
+          width: '100%',
+          height: '100%',
+          ...(isLocal ? { transform: 'scaleX(-1)' } : {})
+        }}
         onLoadedMetadata={() => {
           console.log('[VIDEO PARTICIPANT] ✅ Video metadata loaded for', userName, {
             isLocal,
@@ -321,11 +338,11 @@ export default function VideoParticipant({
             const playPromise = video.play();
             if (playPromise !== undefined) {
               playPromise
-                .then(() => {
+              .then(() => {
                   console.log('[VIDEO PARTICIPANT] ✅ Auto-played after metadata for', userName);
-                  setIsVideoPlaying(true);
-                })
-                .catch((error) => {
+                setIsVideoPlaying(true);
+              })
+              .catch((error) => {
                   console.error('[VIDEO PARTICIPANT] ❌ Auto-play failed for', userName, ':', error);
                   // Retry play after a short delay
                   setTimeout(() => {

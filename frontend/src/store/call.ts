@@ -861,6 +861,13 @@ export const useCallStore = create<CallState>((set, get) => ({
             : p
         ),
       }));
+      
+      // Update remote audio element mute state if needed
+      const remoteAudioElement = document.getElementById(`remote-audio-${data.socketId}`) as HTMLAudioElement;
+      if (remoteAudioElement) {
+        // Note: We can't directly mute remote audio, but we can show visual indicator
+        console.log(`[AUDIO] Remote participant ${data.userId} is ${data.isMuted ? 'muted' : 'unmuted'}`);
+      }
     });
 
     // Handle remote participant video state changes
@@ -1485,8 +1492,9 @@ export const useCallStore = create<CallState>((set, get) => ({
         peerConnection: pc,
         localStream: stream,
         // CRITICAL: Initialize mute/video state from actual track state
-        isMuted: !stream.getAudioTracks()[0]?.enabled ?? false,
-        isVideoOff: !stream.getVideoTracks()[0]?.enabled ?? false,
+        // If no track exists, default to muted/off (true). Otherwise, check if track is enabled.
+        isMuted: stream.getAudioTracks().length === 0 || !stream.getAudioTracks()[0]?.enabled,
+        isVideoOff: stream.getVideoTracks().length === 0 || !stream.getVideoTracks()[0]?.enabled,
       });
 
       // Ensure socket is connected before emitting room:join
@@ -1670,8 +1678,9 @@ export const useCallStore = create<CallState>((set, get) => ({
       const senders = peerConnection.getSenders();
       const audioSender = senders.find(s => s.track?.kind === 'audio');
       if (audioSender && audioSender.track) {
+        // Ensure sender track state matches
+        audioSender.track.enabled = newTrackEnabled;
         console.log('[MUTE] 📡 Peer connection audio sender track enabled:', audioSender.track.enabled);
-        // The track state change should propagate automatically, but we log it
       }
     }
     
@@ -1680,11 +1689,12 @@ export const useCallStore = create<CallState>((set, get) => ({
       const senders = pc.getSenders();
       const audioSender = senders.find(s => s.track?.kind === 'audio');
       if (audioSender && audioSender.track) {
+        audioSender.track.enabled = newTrackEnabled;
         console.log(`[MUTE] 📡 Peer connection ${socketId} audio sender track enabled:`, audioSender.track.enabled);
       }
     });
     
-    // Update store state to match track state
+    // Update store state to match track state IMMEDIATELY
     set({ isMuted: newMutedState });
     
     // Notify other participants of audio state change
@@ -1753,8 +1763,9 @@ export const useCallStore = create<CallState>((set, get) => ({
       const senders = peerConnection.getSenders();
       const videoSender = senders.find(s => s.track?.kind === 'video');
       if (videoSender && videoSender.track) {
+        // Ensure sender track state matches
+        videoSender.track.enabled = newTrackEnabled;
         console.log('[VIDEO] 📡 Peer connection video sender track enabled:', videoSender.track.enabled);
-        // The track state change should propagate automatically, but we log it
       }
     }
     
@@ -1763,11 +1774,12 @@ export const useCallStore = create<CallState>((set, get) => ({
       const senders = pc.getSenders();
       const videoSender = senders.find(s => s.track?.kind === 'video');
       if (videoSender && videoSender.track) {
+        videoSender.track.enabled = newTrackEnabled;
         console.log(`[VIDEO] 📡 Peer connection ${socketId} video sender track enabled:`, videoSender.track.enabled);
       }
     });
     
-    // Update store state to match track state
+    // Update store state to match track state IMMEDIATELY
     set({ isVideoOff: newVideoOff });
     
     // Notify other participants of video state change

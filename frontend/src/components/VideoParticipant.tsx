@@ -44,24 +44,59 @@ export default function VideoParticipant({
   const isSpeaking = externalIsSpeaking !== undefined ? externalIsSpeaking : detectedIsSpeaking;
   const audioLevel = externalAudioLevel !== undefined ? externalAudioLevel : detectedAudioLevel;
 
-  // Check if stream has video track
+  // Check if stream has video track - CRITICAL: Check actual track state
   useEffect(() => {
     if (stream) {
       const videoTracks = stream.getVideoTracks();
-      const hasTrack = videoTracks.length > 0 && videoTracks[0].enabled && !videoTracks[0].muted;
+      // Check actual track state, not just prop
+      const videoTrack = videoTracks[0];
+      const hasTrack = videoTrack && videoTrack.enabled && !videoTrack.muted && videoTrack.readyState === 'live';
       setHasVideoTrack(hasTrack);
       console.log('[VIDEO PARTICIPANT] Video track check:', {
         hasStream: true,
         trackCount: videoTracks.length,
-        trackEnabled: videoTracks[0]?.enabled,
-        trackMuted: videoTracks[0]?.muted,
-        trackReadyState: videoTracks[0]?.readyState,
+        trackEnabled: videoTrack?.enabled,
+        trackMuted: videoTrack?.muted,
+        trackReadyState: videoTrack?.readyState,
+        isVideoOffProp: isVideoOff,
         hasVideoTrack: hasTrack,
+        userName,
       });
+      
+      // Listen to track state changes
+      if (videoTrack) {
+        const handleTrackEnabled = () => {
+          const isEnabled = videoTrack.enabled && !videoTrack.muted;
+          setHasVideoTrack(isEnabled);
+          console.log('[VIDEO PARTICIPANT] Track enabled state changed:', {
+            enabled: isEnabled,
+            userName,
+          });
+        };
+        
+        videoTrack.addEventListener('ended', handleTrackEnabled);
+        videoTrack.addEventListener('mute', handleTrackEnabled);
+        videoTrack.addEventListener('unmute', handleTrackEnabled);
+        
+        // Check enabled property changes (custom event or polling)
+        const checkInterval = setInterval(() => {
+          const currentEnabled = videoTrack.enabled && !videoTrack.muted;
+          if (hasVideoTrack !== currentEnabled) {
+            setHasVideoTrack(currentEnabled);
+          }
+        }, 100);
+        
+        return () => {
+          videoTrack.removeEventListener('ended', handleTrackEnabled);
+          videoTrack.removeEventListener('mute', handleTrackEnabled);
+          videoTrack.removeEventListener('unmute', handleTrackEnabled);
+          clearInterval(checkInterval);
+        };
+      }
     } else {
       setHasVideoTrack(false);
     }
-  }, [stream]);
+  }, [stream, isVideoOff, userName]);
 
   // CRITICAL: Track stream ID and track count to detect changes even if stream object reference is the same
   // These must be computed outside useEffect so they can be used in the dependency array
@@ -87,11 +122,12 @@ export default function VideoParticipant({
       videoElement.setAttribute('muted', 'true');
     }
     
-    // Determine if we should show video
+    // Determine if we should show video - CRITICAL: Check actual track state
     const trackExists = !!videoTrack;
     const trackEnabled = videoTrack?.enabled && !videoTrack.muted;
     const trackActive = videoTrack?.readyState === 'live';
-    const shouldShowVideo = !isVideoOff && trackExists && trackEnabled && trackActive;
+    // Use actual track state, not just prop (prop may be out of sync)
+    const shouldShowVideo = trackExists && trackEnabled && trackActive && !isVideoOff;
     
     console.log('[VIDEO PARTICIPANT] Video state check:', {
       hasStream: !!stream,
@@ -282,8 +318,10 @@ export default function VideoParticipant({
   };
 
   // Show profile placeholder when video is off, no stream, or video not playing
-  // CRITICAL: Only show placeholder if we truly don't have video
-  const showPlaceholder = isVideoOff || !stream || !hasVideoTrack || !isVideoPlaying;
+  // CRITICAL: Check actual track state, not just props
+  const currentVideoTrack = stream?.getVideoTracks()[0];
+  const actualVideoOff = !currentVideoTrack || !currentVideoTrack.enabled || currentVideoTrack.muted || currentVideoTrack.readyState !== 'live';
+  const showPlaceholder = actualVideoOff || !stream || !hasVideoTrack || !isVideoPlaying;
 
   return (
     <div 
@@ -429,9 +467,12 @@ export default function VideoParticipant({
               <SpeakingPulse isSpeaking={isSpeaking && !isMuted} />
             </div>
           )}
-          {isVideoOff && (
-            <div className="absolute inset-0 flex items-center justify-center bg-dark-900/50">
-              <VideoOff size={32} className="text-dark-400" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+          {actualVideoOff && (
+            <div className="absolute inset-0 flex items-center justify-center bg-dark-900/50 backdrop-blur-sm">
+              <div className="text-center">
+                <VideoOff size={32} className="text-dark-400 mx-auto mb-2" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                <p className="text-dark-400 text-xs">Camera Off</p>
+              </div>
             </div>
           )}
         </div>
@@ -450,18 +491,22 @@ export default function VideoParticipant({
             )}
           </div>
           <div className="flex items-center space-x-1.5 flex-shrink-0">
-            {isMuted && (
-              <div className="bg-red-500/80 rounded-full p-1">
-                <MicOff size={12} className="text-white" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
-              </div>
-            )}
-            {!isMuted && (
-              <div className={`rounded-full p-1 transition-colors duration-300 ${
-                isSpeaking ? 'bg-green-500/80' : 'bg-dark-800/80'
-              }`}>
-                <Mic size={12} className="text-white" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
-              </div>
-            )}
+            {/* CRITICAL: Check actual audio track state */}
+            {(() => {
+              const audioTrack = stream?.getAudioTracks()[0];
+              const actuallyMuted = !audioTrack || !audioTrack.enabled || audioTrack.muted;
+              return actuallyMuted ? (
+                <div className="bg-red-500/90 rounded-full p-1.5 animate-pulse">
+                  <MicOff size={14} className="text-white" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                </div>
+              ) : (
+                <div className={`rounded-full p-1.5 transition-colors duration-300 ${
+                  isSpeaking ? 'bg-green-500/90 animate-pulse' : 'bg-dark-800/80'
+                }`}>
+                  <Mic size={14} className="text-white" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
+                </div>
+              );
+            })()}
           </div>
         </div>
       </div>

@@ -112,7 +112,8 @@ export const generateFreeNotes = async (
 
     // Try Hugging Face API first (if available)
     const apiKey = getHuggingFaceAPIKey();
-    const model = 'mistralai/Mistral-7B-Instruct-v0.2'; // Free model
+    // Use Llama 3.2 3B for better responses (faster, free, good quality)
+    const model = 'meta-llama/Llama-3.2-3B-Instruct';
     
     const systemPrompt = `You are AceTime AI assistant. Generate structured meeting notes from the transcript.
 Return ONLY valid JSON with these exact fields:
@@ -144,7 +145,7 @@ Return ONLY valid JSON with these exact fields:
           method: 'POST',
           headers,
           body: JSON.stringify({
-            inputs: `<s>[INST] ${systemPrompt}\n\n${userPrompt} [/INST]`,
+            inputs: `<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n${systemPrompt}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n${userPrompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n`,
             parameters: {
               max_new_tokens: 500,
               temperature: 0.7,
@@ -231,7 +232,7 @@ Return ONLY valid JSON with these exact fields:
 
 /**
  * Generate image using free Hugging Face Stable Diffusion models
- * Uses runwayml/stable-diffusion-v1-5 (free, no API key required)
+ * Uses stabilityai/stable-diffusion-2-1 (better quality, free, no API key required)
  */
 export const generateFreeImage = async (options: {
   prompt: string;
@@ -263,7 +264,8 @@ export const generateFreeImage = async (options: {
 
   try {
     const apiKey = getHuggingFaceAPIKey();
-    const model = 'runwayml/stable-diffusion-v1-5'; // Free Stable Diffusion model
+    // Use SD 2.1 for better quality, or fallback to v1.5 if 2.1 unavailable
+    const model = 'stabilityai/stable-diffusion-2-1';
     
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -334,6 +336,288 @@ export const generateFreeImage = async (options: {
   } catch (error: any) {
     console.error('[FREE AI] ❌ Image generation error:', error);
     throw new Error(`Free image generation failed: ${error.message}`);
+  }
+};
+
+/**
+ * Transcribe audio using free Hugging Face Whisper model
+ * Uses openai/whisper-large-v2 (free, no API key required)
+ */
+export const transcribeFreeAudio = async (
+  audioBuffer: Buffer,
+  language: string = 'en'
+): Promise<{ text: string; segments?: Array<{ start: number; end: number; text: string }> }> => {
+  try {
+    const apiKey = getHuggingFaceAPIKey();
+    const model = 'openai/whisper-large-v2'; // Free Whisper model
+    
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+
+    // Convert buffer to base64
+    const base64Audio = audioBuffer.toString('base64');
+    
+    const response = await fetch(
+      `https://api-inference.huggingface.co/models/${model}`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          inputs: base64Audio,
+          parameters: {
+            language: language,
+            return_timestamps: true,
+          },
+        }),
+      }
+    );
+
+    if (response.ok) {
+      const data = await response.json() as any;
+      const text = data.text || '';
+      const chunks = data.chunks || [];
+      
+      const segments = chunks.map((chunk: any) => ({
+        start: chunk.timestamp[0] || 0,
+        end: chunk.timestamp[1] || 0,
+        text: chunk.text || '',
+      }));
+      
+      console.log('[FREE AI] ✅ Transcription successful using Hugging Face Whisper');
+      return { text, segments };
+    } else if (response.status === 503) {
+      // Model loading, wait and retry
+      console.log('[FREE AI] Model is loading, waiting 15 seconds...');
+      await new Promise(resolve => setTimeout(resolve, 15000));
+      
+      const retryResponse = await fetch(
+        `https://api-inference.huggingface.co/models/${model}`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            inputs: base64Audio,
+            parameters: {
+              language: language,
+              return_timestamps: true,
+            },
+          }),
+        }
+      );
+      
+      if (retryResponse.ok) {
+        const data = await retryResponse.json() as any;
+        const text = data.text || '';
+        const chunks = data.chunks || [];
+        const segments = chunks.map((chunk: any) => ({
+          start: chunk.timestamp[0] || 0,
+          end: chunk.timestamp[1] || 0,
+          text: chunk.text || '',
+        }));
+        return { text, segments };
+      }
+    }
+    
+    throw new Error(`Hugging Face API error: ${response.status}`);
+  } catch (error: any) {
+    console.error('[FREE AI] ❌ Transcription error:', error);
+    throw new Error(`Free transcription failed: ${error.message}`);
+  }
+};
+
+/**
+ * Generate text/prompts using free Hugging Face models
+ * Uses meta-llama/Llama-3.2-3B-Instruct or mistralai/Mistral-7B-Instruct-v0.2
+ */
+export const generateFreeText = async (
+  systemPrompt: string,
+  userPrompt: string,
+  maxTokens: number = 200
+): Promise<string> => {
+  try {
+    const apiKey = getHuggingFaceAPIKey();
+    // Use Llama 3.2 3B for better responses (faster and free)
+    const model = 'meta-llama/Llama-3.2-3B-Instruct';
+    
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+
+    const response = await fetch(
+      `https://api-inference.huggingface.co/models/${model}`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          inputs: `<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n${systemPrompt}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n${userPrompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n`,
+          parameters: {
+            max_new_tokens: maxTokens,
+            temperature: 0.7,
+            return_full_text: false,
+          },
+        }),
+      }
+    );
+
+    if (response.ok) {
+      const data = await response.json() as any;
+      let generatedText = '';
+      
+      if (Array.isArray(data)) {
+        generatedText = data[0]?.generated_text || data[0]?.text || '';
+      } else if (typeof data === 'string') {
+        generatedText = data;
+      } else {
+        generatedText = data?.generated_text || data?.text || '';
+      }
+      
+      // Clean up the response (remove prompt if included)
+      if (generatedText.includes(userPrompt)) {
+        generatedText = generatedText.split(userPrompt).pop() || generatedText;
+      }
+      
+      console.log('[FREE AI] ✅ Text generated using Hugging Face');
+      return generatedText.trim();
+    } else if (response.status === 503) {
+      // Model loading, wait and retry
+      console.log('[FREE AI] Model is loading, waiting 10 seconds...');
+      await new Promise(resolve => setTimeout(resolve, 10000));
+      
+      const retryResponse = await fetch(
+        `https://api-inference.huggingface.co/models/${model}`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            inputs: `<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n${systemPrompt}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n${userPrompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n`,
+            parameters: {
+              max_new_tokens: maxTokens,
+              temperature: 0.7,
+              return_full_text: false,
+            },
+          }),
+        }
+      );
+      
+      if (retryResponse.ok) {
+        const data = await retryResponse.json() as any;
+        let generatedText = '';
+        if (Array.isArray(data)) {
+          generatedText = data[0]?.generated_text || data[0]?.text || '';
+        } else {
+          generatedText = data?.generated_text || data?.text || '';
+        }
+        if (generatedText.includes(userPrompt)) {
+          generatedText = generatedText.split(userPrompt).pop() || generatedText;
+        }
+        return generatedText.trim();
+      }
+    }
+    
+    throw new Error(`Hugging Face API error: ${response.status}`);
+  } catch (error: any) {
+    console.error('[FREE AI] ❌ Text generation error:', error);
+    throw new Error(`Free text generation failed: ${error.message}`);
+  }
+};
+
+/**
+ * Generate comprehensive notes using free AI
+ */
+export const generateFreeComprehensiveNotes = async (
+  transcriptText: string,
+  participants: string[],
+  duration: number,
+  callDate: Date
+): Promise<{
+  title: string;
+  summary: string;
+  sections: Array<{ topic: string; timestamp: string; notes: string[]; relatedTranscript: string }>;
+  actionItems: Array<{ item: string; assignee?: string; dueDate?: string; priority: 'high' | 'medium' | 'low' }>;
+  decisions: Array<{ decision: string; context: string; timestamp: string }>;
+  keyPoints: string[];
+  questionsRaised: string[];
+  nextSteps: string[];
+  suggestedFollowUp?: string;
+}> => {
+  try {
+    const systemPrompt = `You are AceTime AI assistant. Generate comprehensive, structured meeting notes from a completed call transcript.
+
+Participants: ${participants.join(', ') || 'Unknown'}
+Duration: ${Math.round(duration / 60)} minutes
+Date: ${callDate.toLocaleDateString()}
+
+Return ONLY valid JSON with these exact fields:
+{
+  "title": "Meeting title (3-8 words)",
+  "summary": "2-3 sentence executive summary",
+  "sections": [{"topic": "...", "timestamp": "...", "notes": ["..."], "relatedTranscript": "..."}],
+  "actionItems": [{"item": "...", "assignee": "...", "dueDate": "...", "priority": "high|medium|low"}],
+  "decisions": [{"decision": "...", "context": "...", "timestamp": "..."}],
+  "keyPoints": ["..."],
+  "questionsRaised": ["..."],
+  "nextSteps": ["..."],
+  "suggestedFollowUp": "..."
+}`;
+
+    const userPrompt = `Complete meeting transcript:\n${transcriptText}\n\nGenerate comprehensive meeting notes.`;
+
+    const generatedText = await generateFreeText(systemPrompt, userPrompt, 2000);
+    
+    // Extract JSON from response
+    const jsonMatch = generatedText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        const notes = JSON.parse(jsonMatch[0]);
+        console.log('[FREE AI] ✅ Comprehensive notes generated');
+        return {
+          title: notes.title || 'Meeting Notes',
+          summary: notes.summary || '',
+          sections: notes.sections || [],
+          actionItems: notes.actionItems || [],
+          decisions: notes.decisions || [],
+          keyPoints: notes.keyPoints || [],
+          questionsRaised: notes.questionsRaised || [],
+          nextSteps: notes.nextSteps || [],
+          suggestedFollowUp: notes.suggestedFollowUp,
+        };
+      } catch (parseError) {
+        console.warn('[FREE AI] ⚠️ Failed to parse JSON, using extraction');
+      }
+    }
+    
+    // Fallback to basic extraction
+    return {
+      title: 'Meeting Notes',
+      summary: transcriptText.substring(0, 200) + '...',
+      sections: [],
+      actionItems: [],
+      decisions: [],
+      keyPoints: [],
+      questionsRaised: [],
+      nextSteps: [],
+    };
+  } catch (error: any) {
+    console.error('[FREE AI] ❌ Comprehensive notes error:', error);
+    return {
+      title: 'Meeting Notes',
+      summary: 'Notes generation temporarily unavailable.',
+      sections: [],
+      actionItems: [],
+      decisions: [],
+      keyPoints: [],
+      questionsRaised: [],
+      nextSteps: [],
+    };
   }
 };
 

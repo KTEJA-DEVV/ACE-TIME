@@ -1069,14 +1069,22 @@ async function generateImageFromTranscript(
             steps: 30,
           });
         } else if (openai) {
-          const response = await openai.images.generate({
-            model: 'dall-e-3',
-            prompt: `${enhancedPrompt}. Style: dreamlike, surreal, ethereal, magical atmosphere`,
-            n: 1,
-            size: '1024x1024',
-          });
-          imageUrl = response.data?.[0]?.url || '';
-          revisedPrompt = response.data?.[0]?.revised_prompt || enhancedPrompt;
+          try {
+            const response = await openai.images.generate({
+              model: 'dall-e-3',
+              prompt: `${enhancedPrompt}. Style: dreamlike, surreal, ethereal, magical atmosphere`,
+              n: 1,
+              size: '1024x1024',
+            });
+            imageUrl = response.data?.[0]?.url || '';
+            revisedPrompt = response.data?.[0]?.revised_prompt || enhancedPrompt;
+          } catch (openaiError: any) {
+            // If OpenAI quota exceeded, throw a more helpful error
+            if (openaiError.status === 429 || openaiError.code === 'insufficient_quota' || openaiError.error?.code === 'insufficient_quota') {
+              throw new Error('OpenAI quota exceeded. Please check your billing or use free AI services.');
+            }
+            throw openaiError;
+          }
         } else {
           throw new Error('No image generation service available');
         }
@@ -1090,14 +1098,22 @@ async function generateImageFromTranscript(
         steps: 30,
       });
     } else if (openai) {
-      const response = await openai.images.generate({
-        model: 'dall-e-3',
-        prompt: `${enhancedPrompt}. Style: dreamlike, surreal, ethereal, magical atmosphere`,
-        n: 1,
-        size: '1024x1024',
-      });
-      imageUrl = response.data?.[0]?.url || '';
-      revisedPrompt = response.data?.[0]?.revised_prompt || enhancedPrompt;
+      try {
+        const response = await openai.images.generate({
+          model: 'dall-e-3',
+          prompt: `${enhancedPrompt}. Style: dreamlike, surreal, ethereal, magical atmosphere`,
+          n: 1,
+          size: '1024x1024',
+        });
+        imageUrl = response.data?.[0]?.url || '';
+        revisedPrompt = response.data?.[0]?.revised_prompt || enhancedPrompt;
+      } catch (openaiError: any) {
+        // If OpenAI quota exceeded, throw a more helpful error
+        if (openaiError.status === 429 || openaiError.code === 'insufficient_quota' || openaiError.error?.code === 'insufficient_quota') {
+          throw new Error('OpenAI quota exceeded. Please check your billing or use free AI services.');
+        }
+        throw openaiError;
+      }
     } else {
       throw new Error('No image generation service available');
     }

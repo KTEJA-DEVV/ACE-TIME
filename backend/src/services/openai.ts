@@ -3,6 +3,29 @@ import OpenAI from 'openai';
 // Lazy initialization of OpenAI client
 let openai: OpenAI | null = null;
 
+// Helper to check if error is a quota/rate limit error
+const isQuotaError = (error: any): boolean => {
+  if (!error) return false;
+  
+  // Check for OpenAI API error structure
+  if (error.status === 429 || error.code === 'insufficient_quota' || error.type === 'insufficient_quota') {
+    return true;
+  }
+  
+  // Check error message
+  const errorMessage = error.message?.toLowerCase() || '';
+  if (errorMessage.includes('quota') || errorMessage.includes('insufficient_quota') || errorMessage.includes('rate_limit')) {
+    return true;
+  }
+  
+  // Check nested error structure
+  if (error.error?.code === 'insufficient_quota' || error.error?.type === 'insufficient_quota') {
+    return true;
+  }
+  
+  return false;
+};
+
 export const getOpenAI = (): OpenAI | null => {
   if (openai) return openai;
   
@@ -66,13 +89,25 @@ export const transcribeAudio = async (
   audioBuffer: Buffer,
   language: string = 'en'
 ): Promise<TranscriptionResult> => {
+  // PRIORITY: Try free AI first (always available, no cost)
+  try {
+    const { transcribeFreeAudio } = await import('./freeAI');
+    console.log('[WHISPER] 🆓 Trying free Hugging Face Whisper first...');
+    const result = await transcribeFreeAudio(audioBuffer, language);
+    console.log('[WHISPER] ✅ Free transcription successful');
+    return result;
+  } catch (freeError: any) {
+    console.warn('[WHISPER] ⚠️ Free transcription failed, trying OpenAI:', freeError.message);
+    // Fallback to OpenAI if free AI fails
+  }
+
   const client = getOpenAI();
   
-  // If no OpenAI key, return mock transcription for development
+  // If no OpenAI key, return unavailable message
   if (!client) {
-    console.warn('⚠️ OpenAI not configured - using mock transcription');
+    console.warn('⚠️ OpenAI not configured - transcription unavailable');
     return {
-      text: '[Transcription unavailable - configure OPENAI_API_KEY]',
+      text: '[Transcription temporarily unavailable]',
       segments: [],
     };
   }
@@ -107,8 +142,18 @@ export const transcribeAudio = async (
         text: seg.text,
       })),
     };
-  } catch (error) {
-    console.error('Transcription error:', error);
+  } catch (error: any) {
+    console.error('[WHISPER] Transcription error:', error);
+    
+    // If quota exceeded, return a helpful message instead of crashing
+    if (isQuotaError(error)) {
+      console.warn('[WHISPER] ⚠️ OpenAI quota exceeded - returning unavailable message');
+      return {
+        text: '[Transcription temporarily unavailable - OpenAI quota exceeded. Please check your billing or try again later.]',
+        segments: [],
+      };
+    }
+    
     throw error;
   }
 };
@@ -118,13 +163,29 @@ export const generateNotes = async (
   transcriptText: string,
   previousNotes?: Partial<NotesResult>
 ): Promise<NotesResult> => {
+  // PRIORITY: Try free AI first (always available, no cost, better for most use cases)
+  try {
+    const { generateFreeNotes } = await import('./freeAI');
+    console.log('[NOTES] 🆓 Using free AI service for notes generation');
+    return await generateFreeNotes(transcriptText, previousNotes);
+  } catch (freeError: any) {
+    console.warn('[NOTES] ⚠️ Free AI failed, trying OpenAI fallback:', freeError.message);
+    // Fallback to OpenAI if free AI fails
+  }
+
   const client = getOpenAI();
   
-  // If no OpenAI key, use free AI service
+  // If no OpenAI key, return basic notes
   if (!client) {
-    console.log('[OPENAI] ⚠️ OpenAI not configured - using free AI service');
-    const { generateFreeNotes } = await import('./freeAI');
-    return generateFreeNotes(transcriptText, previousNotes);
+    console.log('[NOTES] ⚠️ OpenAI not configured - using basic extraction');
+    return {
+      summary: 'Notes generation temporarily unavailable.',
+      bullets: [],
+      actionItems: [],
+      decisions: [],
+      suggestedReplies: [],
+      keyTopics: [],
+    };
   }
 
   const systemPrompt = `You are AceTime AI assistant. Based on the meeting transcript provided, generate structured notes.
@@ -180,8 +241,29 @@ Generate meeting notes from this transcript.`;
       suggestedReplies: notes.suggestedReplies || [],
       keyTopics: notes.keyTopics || [],
     };
-  } catch (error) {
-    console.error('Notes generation error:', error);
+  } catch (error: any) {
+    console.error('[OPENAI] Notes generation error:', error);
+    
+    // If quota exceeded, fallback to free AI service
+    if (isQuotaError(error)) {
+      console.warn('[OPENAI] ⚠️ OpenAI quota exceeded - falling back to free AI service');
+      try {
+        const { generateFreeNotes } = await import('./freeAI');
+        return generateFreeNotes(transcriptText, previousNotes);
+      } catch (fallbackError) {
+        console.error('[OPENAI] Free AI fallback also failed:', fallbackError);
+        // Return basic notes structure
+        return {
+          summary: 'Notes generation temporarily unavailable due to API quota limits.',
+          bullets: [],
+          actionItems: [],
+          decisions: [],
+          suggestedReplies: [],
+          keyTopics: [],
+        };
+      }
+    }
+    
     throw error;
   }
 };
@@ -192,13 +274,29 @@ export const generateFinalSummary = async (
   participants: string[],
   duration: number
 ): Promise<NotesResult> => {
+  // PRIORITY: Try free AI first (always available, no cost)
+  try {
+    const { generateFreeNotes } = await import('./freeAI');
+    console.log('[NOTES] 🆓 Using free AI service for final summary');
+    return await generateFreeNotes(transcriptText);
+  } catch (freeError: any) {
+    console.warn('[NOTES] ⚠️ Free AI failed, trying OpenAI fallback:', freeError.message);
+    // Fallback to OpenAI if free AI fails
+  }
+
   const client = getOpenAI();
   
-  // If no OpenAI key, use free AI service
+  // If no OpenAI key, return basic notes
   if (!client) {
-    console.log('[OPENAI] ⚠️ OpenAI not configured - using free AI service');
-    const { generateFreeNotes } = await import('./freeAI');
-    return generateFreeNotes(transcriptText);
+    console.log('[NOTES] ⚠️ OpenAI not configured - using basic extraction');
+    return {
+      summary: 'Summary generation temporarily unavailable.',
+      bullets: [],
+      actionItems: [],
+      decisions: [],
+      suggestedReplies: [],
+      keyTopics: [],
+    };
   }
 
   const systemPrompt = `You are AceTime AI assistant. Generate a comprehensive executive summary and analysis of a completed meeting/call.
@@ -249,8 +347,29 @@ Generate a comprehensive executive summary and analysis.`;
       suggestedReplies: notes.suggestedReplies || [],
       keyTopics: notes.keyTopics || [],
     };
-  } catch (error) {
-    console.error('Final summary generation error:', error);
+  } catch (error: any) {
+    console.error('[OPENAI] Final summary generation error:', error);
+    
+    // If quota exceeded, fallback to free AI service
+    if (isQuotaError(error)) {
+      console.warn('[OPENAI] ⚠️ OpenAI quota exceeded - falling back to free AI service');
+      try {
+        const { generateFreeNotes } = await import('./freeAI');
+        return generateFreeNotes(transcriptText);
+      } catch (fallbackError) {
+        console.error('[OPENAI] Free AI fallback also failed:', fallbackError);
+        // Return basic notes structure
+        return {
+          summary: 'Summary generation temporarily unavailable due to API quota limits.',
+          bullets: [],
+          actionItems: [],
+          decisions: [],
+          suggestedReplies: [],
+          keyTopics: [],
+        };
+      }
+    }
+    
     throw error;
   }
 };
@@ -262,13 +381,23 @@ export const generateComprehensiveNotes = async (
   duration: number,
   callDate: Date
 ): Promise<ComprehensiveNotesResult> => {
+  // PRIORITY: Try free AI first (always available, no cost)
+  try {
+    const { generateFreeComprehensiveNotes } = await import('./freeAI');
+    console.log('[NOTES] 🆓 Using free AI service for comprehensive notes');
+    return await generateFreeComprehensiveNotes(transcriptText, participants, duration, callDate);
+  } catch (freeError: any) {
+    console.warn('[NOTES] ⚠️ Free AI failed, trying OpenAI fallback:', freeError.message);
+    // Fallback to OpenAI if free AI fails
+  }
+
   const client = getOpenAI();
   
   if (!client) {
-    console.log('[OPENAI] ⚠️ OpenAI not configured - using mock notes');
+    console.log('[NOTES] ⚠️ OpenAI not configured - using basic notes');
     return {
       title: 'Meeting Notes',
-      summary: 'Meeting notes will be generated when OpenAI is configured.',
+      summary: 'Comprehensive notes generation temporarily unavailable.',
       sections: [],
       actionItems: [],
       decisions: [],
@@ -344,8 +473,24 @@ Generate comprehensive, structured meeting notes.`;
       nextSteps: notes.nextSteps || [],
       suggestedFollowUp: notes.suggestedFollowUp || undefined,
     };
-  } catch (error) {
-    console.error('Comprehensive notes generation error:', error);
+  } catch (error: any) {
+    console.error('[OPENAI] Comprehensive notes generation error:', error);
+    
+    // If quota exceeded, return basic structure instead of crashing
+    if (isQuotaError(error)) {
+      console.warn('[OPENAI] ⚠️ OpenAI quota exceeded - returning basic notes structure');
+      return {
+        title: 'Meeting Notes',
+        summary: 'Comprehensive notes generation temporarily unavailable due to API quota limits. Please check your OpenAI billing or try again later.',
+        sections: [],
+        actionItems: [],
+        decisions: [],
+        keyPoints: [],
+        questionsRaised: [],
+        nextSteps: [],
+      };
+    }
+    
     throw error;
   }
 };

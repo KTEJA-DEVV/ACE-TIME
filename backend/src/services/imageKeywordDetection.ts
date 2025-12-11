@@ -1,5 +1,25 @@
 import { getOpenAI } from './openai';
 
+// Helper to check if error is a quota/rate limit error
+const isQuotaError = (error: any): boolean => {
+  if (!error) return false;
+  
+  if (error.status === 429 || error.code === 'insufficient_quota' || error.type === 'insufficient_quota') {
+    return true;
+  }
+  
+  const errorMessage = error.message?.toLowerCase() || '';
+  if (errorMessage.includes('quota') || errorMessage.includes('insufficient_quota') || errorMessage.includes('rate_limit')) {
+    return true;
+  }
+  
+  if (error.error?.code === 'insufficient_quota' || error.error?.type === 'insufficient_quota') {
+    return true;
+  }
+  
+  return false;
+};
+
 /**
  * Keywords that trigger automatic image generation
  */
@@ -71,16 +91,61 @@ export async function detectVisualConcept(
     };
   }
 
-  // Advanced detection using AI (if OpenAI is available)
-  const openai = getOpenAI();
-  if (openai && fullContext.length > 50) {
+  // Advanced detection using free AI first, then OpenAI fallback
+  if (fullContext.length > 50) {
     try {
-      const aiDetection = await detectVisualConceptWithAI(fullContext, openai);
-      if (aiDetection.shouldGenerate) {
-        return aiDetection;
+      const { generateFreeText } = await import('./freeAI');
+      const systemPrompt = `You are an AI assistant that detects when conversations contain visual concepts that would benefit from image generation.
+
+Analyze the conversation and determine if it contains:
+1. Visual descriptions (colors, shapes, objects, scenes)
+2. Creative concepts (designs, logos, artwork, architecture)
+3. Imaginary scenarios (dreams, visions, fantasies)
+4. Requests for visualizations ("show me", "imagine", "picture")
+
+Respond with JSON:
+{
+  "shouldGenerate": boolean,
+  "prompt": "extracted image prompt or null",
+  "confidence": number (0-1),
+  "reason": "brief explanation"
+}`;
+      
+      const userPrompt = `Analyze this conversation for visual concepts:\n\n${fullContext.substring(-500)}`;
+      
+      const generatedText = await generateFreeText(systemPrompt, userPrompt, 200);
+      const jsonMatch = generatedText.match(/\{[\s\S]*\}/);
+      
+      if (jsonMatch) {
+        try {
+          const result = JSON.parse(jsonMatch[0]);
+          if (result.shouldGenerate === true) {
+            console.log('[IMAGE DETECTION] ✅ Free AI detected visual concept');
+            return {
+              shouldGenerate: true,
+              prompt: result.prompt || undefined,
+              confidence: result.confidence || 0.7,
+            };
+          }
+        } catch (parseError) {
+          console.warn('[IMAGE DETECTION] Failed to parse free AI response');
+        }
       }
-    } catch (error) {
-      console.warn('[IMAGE DETECTION] AI detection failed, using basic detection:', error);
+    } catch (freeError) {
+      console.warn('[IMAGE DETECTION] Free AI detection failed, trying OpenAI:', freeError);
+    }
+    
+    // Fallback to OpenAI if free AI fails
+    const openai = getOpenAI();
+    if (openai) {
+      try {
+        const aiDetection = await detectVisualConceptWithAI(fullContext, openai);
+        if (aiDetection.shouldGenerate) {
+          return aiDetection;
+        }
+      } catch (error) {
+        console.warn('[IMAGE DETECTION] OpenAI detection failed, using basic detection:', error);
+      }
     }
   }
 
@@ -175,8 +240,13 @@ Respond with JSON:
         confidence: result.confidence || 0.5,
       };
     }
-  } catch (error) {
-    console.error('[IMAGE DETECTION] AI detection error:', error);
+  } catch (error: any) {
+    // If quota exceeded, gracefully fall back to basic detection
+    if (isQuotaError(error)) {
+      console.warn('[IMAGE DETECTION] ⚠️ OpenAI quota exceeded - using basic keyword detection');
+    } else {
+      console.error('[IMAGE DETECTION] AI detection error:', error);
+    }
   }
 
   return { shouldGenerate: false, confidence: 0 };
@@ -189,8 +259,27 @@ export async function generateImagePromptFromContext(
   transcriptText: string,
   recentSegments?: string[]
 ): Promise<string> {
-  const openai = getOpenAI();
+  // PRIORITY: Try free AI first
+  try {
+    const { generateFreeText } = await import('./freeAI');
+    const context = recentSegments 
+      ? [...recentSegments, transcriptText].join(' ')
+      : transcriptText;
+
+    const systemPrompt = 'You are a creative AI that generates vivid, imaginative image prompts from conversations. Extract the main visual concept and create a detailed, artistic image prompt. Focus on colors, mood, style, and key visual elements. Output only the image prompt, nothing else.';
+    const userPrompt = `Generate an image prompt from this conversation:\n\n${context.substring(-500)}`;
+    
+    const prompt = await generateFreeText(systemPrompt, userPrompt, 200);
+    if (prompt && prompt.length > 10) {
+      console.log('[IMAGE DETECTION] ✅ Free AI generated prompt');
+      return prompt.trim();
+    }
+  } catch (freeError) {
+    console.warn('[IMAGE DETECTION] Free AI prompt generation failed, trying OpenAI:', freeError);
+  }
   
+  // Fallback to OpenAI
+  const openai = getOpenAI();
   if (openai) {
     try {
       const context = recentSegments 
@@ -217,8 +306,13 @@ export async function generateImagePromptFromContext(
       if (prompt && prompt.length > 10) {
         return prompt;
       }
-    } catch (error) {
-      console.error('[IMAGE DETECTION] Prompt generation error:', error);
+    } catch (error: any) {
+      // If quota exceeded, gracefully fall back to simple extraction
+      if (isQuotaError(error)) {
+        console.warn('[IMAGE DETECTION] ⚠️ OpenAI quota exceeded - using simple prompt extraction');
+      } else {
+        console.error('[IMAGE DETECTION] OpenAI prompt generation error:', error);
+      }
     }
   }
 

@@ -238,27 +238,52 @@ router.post(
       let generatedPrompt: string;
       let imageUrl: string;
 
-      // Generate image prompt from transcript (use OpenAI GPT if available, otherwise use simple extraction)
-      if (openai) {
-        const promptResponse = await openai.chat.completions.create({
-          model: 'gpt-4o',
-          messages: [
-            {
-              role: 'system',
-              content: 'You are a creative AI that generates visual prompts from conversations. Create a vivid, imaginative image prompt based on the conversation context. Focus on the main ideas, emotions, or concepts being discussed. Output only the image prompt, nothing else.',
-            },
-            {
-              role: 'user',
-              content: `Generate an image prompt from this conversation:\n\n${context}`,
-            },
-          ],
-          max_tokens: 200,
-        });
+      // Generate image prompt from transcript - PRIORITY: Use free AI first
+      try {
+        const { generateFreeText } = await import('../services/freeAI');
+        const systemPrompt = 'You are a creative AI that generates visual prompts from conversations. Create a vivid, imaginative image prompt based on the conversation context. Focus on the main ideas, emotions, or concepts being discussed. Output only the image prompt, nothing else.';
+        const userPrompt = `Generate an image prompt from this conversation:\n\n${context}`;
+        
+        generatedPrompt = await generateFreeText(systemPrompt, userPrompt, 200);
+        if (!generatedPrompt || generatedPrompt.length < 10) {
+          throw new Error('Free AI returned empty prompt');
+        }
+        console.log('[IMAGES] ✅ Free AI generated prompt from transcript');
+      } catch (freeError) {
+        console.warn('[IMAGES] ⚠️ Free AI prompt generation failed, trying OpenAI:', freeError);
+        
+        // Fallback to OpenAI
+        if (openai) {
+          try {
+            const promptResponse = await openai.chat.completions.create({
+              model: 'gpt-4o',
+              messages: [
+                {
+                  role: 'system',
+                  content: 'You are a creative AI that generates visual prompts from conversations. Create a vivid, imaginative image prompt based on the conversation context. Focus on the main ideas, emotions, or concepts being discussed. Output only the image prompt, nothing else.',
+                },
+                {
+                  role: 'user',
+                  content: `Generate an image prompt from this conversation:\n\n${context}`,
+                },
+              ],
+              max_tokens: 200,
+            });
 
-        generatedPrompt = promptResponse.choices[0]?.message?.content || context;
-      } else {
-        // Simple extraction if no OpenAI
-        generatedPrompt = context.substring(0, 200);
+            generatedPrompt = promptResponse.choices[0]?.message?.content || context;
+          } catch (openaiError: any) {
+            // If quota exceeded, use simple extraction
+            if (openaiError.status === 429 || openaiError.code === 'insufficient_quota') {
+              console.warn('[IMAGES] ⚠️ OpenAI quota exceeded, using simple extraction');
+              generatedPrompt = context.substring(0, 200);
+            } else {
+              throw openaiError;
+            }
+          }
+        } else {
+          // Simple extraction if no OpenAI
+          generatedPrompt = context.substring(0, 200);
+        }
       }
 
       // Generate image - try free AI first

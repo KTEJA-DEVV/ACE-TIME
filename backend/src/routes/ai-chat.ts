@@ -8,6 +8,7 @@ import { CallSession } from '../models/CallSession';
 import { Transcript } from '../models/Transcript';
 import { Notes } from '../models/Notes';
 import { getOpenAI } from '../services/openai';
+import { generateFreeText } from '../services/freeAI';
 
 const router = Router();
 
@@ -174,8 +175,6 @@ You have access to the user's recent call transcripts and meeting summaries. Use
 
 Be conversational, helpful, and concise. You can reference their recent activities when relevant, but don't overdo it.`;
 
-    const openai = getOpenAI();
-
     // Set up streaming response
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -194,50 +193,92 @@ Be conversational, helpful, and concise. You can reference their recent activiti
     let fullResponse = '';
 
     try {
-      if (openai) {
-        // Use OpenAI streaming
-        const stream = await openai.chat.completions.create({
-          model: 'gpt-4o',
-          messages: [
-            { role: 'system', content: systemPrompt },
-            ...messageHistory,
-            { role: 'user', content: message },
-          ],
-          stream: true,
-          temperature: 0.7,
-          max_tokens: 1000,
-        });
-
-        for await (const chunk of stream) {
-          const content = chunk.choices[0]?.delta?.content || '';
-          if (content) {
-            fullResponse += content;
-            // Send chunk to client
-            res.write(`data: ${JSON.stringify({ type: 'chunk', content })}\n\n`);
-          }
-        }
-
-        // Send completion
-        res.write(`data: ${JSON.stringify({ type: 'done', messageId: aiMessage._id.toString() })}\n\n`);
-      } else {
-        // Mock mode - simulate streaming
-        const mockResponse = `I understand you're asking about "${message}". 
-
-As AceTime AI, I'm here to help! While I don't have access to OpenAI right now (no API key configured), I can still assist you with general questions.
-
-To enable full AI capabilities, please configure your OPENAI_API_KEY in the environment variables.`;
-
-        // Simulate word-by-word streaming
-        const words = mockResponse.split(' ');
+      // PRIORITY: Try free AI first (always available, no cost)
+      try {
+        console.log('[AI CHAT] 🆓 Using free AI service for chat response');
+        
+        // Build conversation context for free AI
+        const conversationContext = messageHistory
+          .map(msg => `${msg.role === 'assistant' ? 'Assistant' : 'User'}: ${msg.content}`)
+          .join('\n');
+        
+        const userPrompt = conversationContext 
+          ? `${conversationContext}\n\nUser: ${message}\n\nAssistant:`
+          : `User: ${message}\n\nAssistant:`;
+        
+        const response = await generateFreeText(systemPrompt, userPrompt, 1000);
+        fullResponse = response;
+        
+        // Simulate streaming for better UX (word-by-word)
+        const words = fullResponse.split(' ');
         for (let i = 0; i < words.length; i++) {
           const chunk = (i === 0 ? '' : ' ') + words[i];
-          fullResponse += chunk;
           res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk })}\n\n`);
           // Small delay to simulate streaming
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          await new Promise((resolve) => setTimeout(resolve, 30));
         }
-
+        
         res.write(`data: ${JSON.stringify({ type: 'done', messageId: aiMessage._id.toString() })}\n\n`);
+        console.log('[AI CHAT] ✅ Free AI response generated');
+      } catch (freeError: any) {
+        console.warn('[AI CHAT] ⚠️ Free AI failed, trying OpenAI fallback:', freeError.message);
+        
+        // Fallback to OpenAI
+        const openai = getOpenAI();
+        if (openai) {
+          try {
+            // Use OpenAI streaming
+            const stream = await openai.chat.completions.create({
+              model: 'gpt-4o',
+              messages: [
+                { role: 'system', content: systemPrompt },
+                ...messageHistory,
+                { role: 'user', content: message },
+              ],
+              stream: true,
+              temperature: 0.7,
+              max_tokens: 1000,
+            });
+
+            for await (const chunk of stream) {
+              const content = chunk.choices[0]?.delta?.content || '';
+              if (content) {
+                fullResponse += content;
+                // Send chunk to client
+                res.write(`data: ${JSON.stringify({ type: 'chunk', content })}\n\n`);
+              }
+            }
+
+            // Send completion
+            res.write(`data: ${JSON.stringify({ type: 'done', messageId: aiMessage._id.toString() })}\n\n`);
+          } catch (openaiError: any) {
+            // If quota exceeded, return helpful message
+            if (openaiError.status === 429 || openaiError.code === 'insufficient_quota') {
+              const errorMessage = 'AI service temporarily unavailable due to quota limits. Please try again later.';
+              fullResponse = errorMessage;
+              res.write(`data: ${JSON.stringify({ type: 'chunk', content: errorMessage })}\n\n`);
+              res.write(`data: ${JSON.stringify({ type: 'done', messageId: aiMessage._id.toString() })}\n\n`);
+            } else {
+              throw openaiError;
+            }
+          }
+        } else {
+          // No OpenAI available - return helpful message
+          const mockResponse = `I understand you're asking about "${message}". 
+
+As AceTime AI, I'm here to help! AI services are currently unavailable. Please try again later or configure API keys for enhanced features.`;
+
+          // Simulate word-by-word streaming
+          const words = mockResponse.split(' ');
+          for (let i = 0; i < words.length; i++) {
+            const chunk = (i === 0 ? '' : ' ') + words[i];
+            fullResponse += chunk;
+            res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk })}\n\n`);
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+
+          res.write(`data: ${JSON.stringify({ type: 'done', messageId: aiMessage._id.toString() })}\n\n`);
+        }
       }
 
       // Update AI message with full response

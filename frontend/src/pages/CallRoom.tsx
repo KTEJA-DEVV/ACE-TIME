@@ -493,19 +493,61 @@ export default function CallRoom() {
   }, [leaveRoom]);
 
   // Set up video streams with smooth transitions (prevent glitches)
+  // CRITICAL: Sync state with actual track state
   useEffect(() => {
-    if (localVideoRef.current && localStream && !isVideoOff) {
-      console.log('[VIDEO] Setting local video stream');
-      const videoElement = localVideoRef.current;
-      // Only update if stream changed to prevent glitches
-      if (videoElement.srcObject !== localStream) {
-        videoElement.srcObject = localStream;
+    if (localStream) {
+      const videoTrack = localStream.getVideoTracks()[0];
+      const audioTrack = localStream.getAudioTracks()[0];
+      
+      // Sync state with actual track state
+      if (videoTrack) {
+        const trackEnabled = videoTrack.enabled;
+        if (isVideoOff === trackEnabled) {
+          // State mismatch - update to match track
+          console.log('[VIDEO] 🔄 Syncing state with track - track enabled:', trackEnabled);
+          useCallStore.setState({ isVideoOff: !trackEnabled });
+        }
       }
-      videoElement.play().catch((error) => {
-        console.error('[VIDEO] Error playing local video:', error);
-      });
-    } else if (localVideoRef.current && (isVideoOff || !localStream)) {
-      // Smoothly clear video when turned off
+      
+      if (audioTrack) {
+        const trackEnabled = audioTrack.enabled;
+        const shouldBeMuted = !trackEnabled;
+        if (isMuted !== shouldBeMuted) {
+          // State mismatch - update to match track
+          console.log('[AUDIO] 🔄 Syncing state with track - track enabled:', trackEnabled);
+          useCallStore.setState({ isMuted: shouldBeMuted });
+        }
+      }
+    }
+  }, [localStream, isVideoOff, isMuted]);
+
+  // Set up local video element
+  useEffect(() => {
+    if (localVideoRef.current && localStream) {
+      const videoElement = localVideoRef.current;
+      const videoTrack = localStream.getVideoTracks()[0];
+      
+      // Check actual track state, not just store state
+      const isVideoActuallyOff = !videoTrack || !videoTrack.enabled;
+      
+      if (!isVideoActuallyOff) {
+        console.log('[VIDEO] Setting local video stream (track enabled)');
+        // Only update if stream changed to prevent glitches
+        if (videoElement.srcObject !== localStream) {
+          videoElement.srcObject = localStream;
+        }
+        videoElement.play().catch((error) => {
+          console.error('[VIDEO] Error playing local video:', error);
+        });
+      } else {
+        console.log('[VIDEO] Clearing local video (track disabled)');
+        // Smoothly clear video when turned off
+        if (videoElement.srcObject) {
+          videoElement.srcObject = null;
+        }
+      }
+    } else if (localVideoRef.current && !localStream) {
+      // No stream at all
       if (localVideoRef.current.srcObject) {
         localVideoRef.current.srcObject = null;
       }

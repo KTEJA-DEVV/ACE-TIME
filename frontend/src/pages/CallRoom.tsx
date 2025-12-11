@@ -2956,7 +2956,7 @@ export default function CallRoom() {
               
               return (
                 <div 
-                  className={`w-full h-full grid gap-1 sm:gap-3 md:gap-4 p-2 sm:p-4 md:p-6 relative ${gridConfig.containerClass}`}
+                  className={`w-full h-full grid gap-2 sm:gap-3 md:gap-4 p-3 sm:p-4 md:p-6 relative ${gridConfig.containerClass}`}
                   style={{
                     display: 'grid', // Explicit grid display
                     gridTemplateColumns: gridConfig.gridCols,
@@ -3507,7 +3507,7 @@ export default function CallRoom() {
               
               return (
                 <div 
-                  className={`w-full h-full grid gap-1 sm:gap-3 md:gap-4 p-2 sm:p-4 md:p-6 relative ${gridConfig.containerClass}`}
+                  className={`w-full h-full grid gap-2 sm:gap-3 md:gap-4 p-3 sm:p-4 md:p-6 relative ${gridConfig.containerClass}`}
                   style={{
                     display: 'grid', // Explicit grid display
                     gridTemplateColumns: gridConfig.gridCols,

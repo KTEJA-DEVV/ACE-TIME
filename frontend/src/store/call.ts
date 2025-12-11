@@ -437,9 +437,21 @@ export const useCallStore = create<CallState>((set, get) => ({
     });
 
     socket.on('user:left', (data) => {
-      set((state) => ({
-        participants: state.participants.filter(p => p.socketId !== data.socketId),
-      }));
+      console.log('[CALL] User left:', data.userName, 'Remaining participants:', data.participantCount);
+      set((state) => {
+        const updatedParticipants = state.participants.filter(p => p.socketId !== data.socketId);
+        console.log('[CALL] Updated participants count:', updatedParticipants.length);
+        return {
+          participants: updatedParticipants,
+        };
+      });
+      
+      // Keep call active - don't change call status
+      // Call only ends when call:ended event is received (last participant left)
+      const { callStatus } = get();
+      if (callStatus === 'active') {
+        console.log('[CALL] Call continues with remaining participants');
+      }
     });
 
     socket.on('signal:offer', async (data) => {
@@ -631,7 +643,8 @@ export const useCallStore = create<CallState>((set, get) => ({
       }
     });
 
-    socket.on('call:ended', async () => {
+    socket.on('call:ended', async (data) => {
+      console.log('[CALL] Call ended for all participants:', data?.reason || 'unknown');
       set({
         callStatus: 'ended',
         isRecording: false,
@@ -640,9 +653,9 @@ export const useCallStore = create<CallState>((set, get) => ({
       get().stopSpeechRecognition();
       // Stop AI analysis
       get().stopAIAnalysis();
-      // Generate final summary
+      // Generate final summary (only when call actually ends for everyone)
       await get().analyzeTranscript(true);
-      // Stop and upload recording
+      // Stop and upload recording (only when call actually ends for everyone)
       await get().stopCallRecording();
     });
 
@@ -1421,42 +1434,47 @@ export const useCallStore = create<CallState>((set, get) => ({
   },
 
   endCall: async () => {
-    const { socket, localStream, peerConnection } = get();
+    const { socket, localStream, peerConnection, roomId } = get();
     
-    // Stop speech recognition
+    console.log('[CALL] User leaving call, but call continues for others');
+    
+    // Stop speech recognition for this user only
     get().stopSpeechRecognition();
-    // Stop AI analysis
+    // Stop AI analysis for this user only
     get().stopAIAnalysis();
-    // Generate final summary
-    await get().analyzeTranscript(true);
-    // Stop and upload recording
-    await get().stopCallRecording();
     
-    if (socket) {
-      socket.emit('call:end');
-    }
-    
-    // Stop all media tracks
+    // Stop all media tracks for this user
     if (localStream) {
       localStream.getTracks().forEach(track => {
         track.stop();
-        console.log('Stopped track:', track.kind);
+        console.log('[CALL] Stopped track:', track.kind);
       });
     }
     
-    // Close peer connection
+    // Close peer connection for this user
     if (peerConnection) {
       peerConnection.close();
     }
     
+    // Emit call:end to remove this user from the call
+    // The call will continue for other participants
+    if (socket && roomId) {
+      socket.emit('call:end');
+    }
+    
+    // Leave the room (this will trigger user:left event for others)
+    get().leaveRoom();
+    
+    // Clear local state (this user has left, but call may continue for others)
     set({ 
-      callStatus: 'ended', 
+      callStatus: 'ended', // This user's call has ended
       isRecording: false,
       isMinimized: false,
-      callStartTime: null, // Clear start time when call ends
+      callStartTime: null,
       localStream: null,
       remoteStream: null,
       peerConnection: null,
+      participants: [], // Clear participants list for this user
     });
   },
 

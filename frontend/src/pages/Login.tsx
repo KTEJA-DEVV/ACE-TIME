@@ -261,9 +261,17 @@ export default function Login() {
                   onClick={() => handleSocialLogin('google')}
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
-                  className="flex items-center justify-center space-x-2 py-3 bg-dark-800/50 border border-dark-700 rounded-xl text-white hover:bg-dark-800 transition group"
+                  className="flex items-center justify-center gap-2 h-12 sm:h-12 md:h-14 bg-dark-800/50 border border-dark-700 rounded-xl text-white hover:bg-dark-800 transition group overflow-hidden"
+                  style={{ borderRadius: '12px' }}
                 >
-                  <svg className="w-5 h-5" viewBox="0 0 24 24">
+                  <svg 
+                    className="flex-shrink-0 w-7 h-7 sm:w-8 sm:h-8 lg:w-9 lg:h-9" 
+                    viewBox="0 0 24 24"
+                    style={{ 
+                      minWidth: '28px',
+                      maxWidth: '36px'
+                    }}
+                  >
                     <path
                       fill="currentColor"
                       d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -281,7 +289,7 @@ export default function Login() {
                       d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
                     />
                   </svg>
-                  <span className="text-sm font-medium group-hover:text-white transition">Google</span>
+                  <span className="text-sm font-medium group-hover:text-white transition whitespace-nowrap">Google</span>
                 </motion.button>
 
                 <motion.button
@@ -289,12 +297,21 @@ export default function Login() {
                   onClick={() => handleSocialLogin('apple')}
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
-                  className="flex items-center justify-center space-x-2 py-3 bg-dark-800/50 border border-dark-700 rounded-xl text-white hover:bg-dark-800 transition group"
+                  className="flex items-center justify-center gap-2 h-12 sm:h-12 md:h-14 bg-dark-800/50 border border-dark-700 rounded-xl text-white hover:bg-dark-800 transition group overflow-hidden"
+                  style={{ borderRadius: '12px' }}
                 >
-                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                  <svg 
+                    className="flex-shrink-0 w-7 h-7 sm:w-8 sm:h-8 lg:w-9 lg:h-9" 
+                    viewBox="0 0 24 24" 
+                    fill="currentColor"
+                    style={{ 
+                      minWidth: '28px',
+                      maxWidth: '36px'
+                    }}
+                  >
                     <path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.48-3.24 0-1.44.62-2.2.44-3.06-.4C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.17 2.08-1.85 3.86-3.74 4.25z" />
                   </svg>
-                  <span className="text-sm font-medium group-hover:text-white transition">Apple</span>
+                  <span className="text-sm font-medium group-hover:text-white transition whitespace-nowrap">Apple</span>
                 </motion.button>
               </div>
 

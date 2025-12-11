@@ -905,7 +905,10 @@ export default function CallRoom() {
   };
 
   const handleEndCall = () => {
+    // User is leaving - endCall() will handle cleanup and emit user:left
+    // Navigation will happen when call:ended is received (if last participant)
     endCall();
+    // Navigate immediately since this user is leaving
     navigate('/home');
   };
 
@@ -2769,7 +2772,25 @@ export default function CallRoom() {
             {/* Show controls when: call is active or waiting, regardless of active tab */}
             {(callStatus === 'active' || callStatus === 'waiting') && 
              !showBottomSheet && (
-              <div className="fixed bottom-6 sm:bottom-8 left-1/2 transform -translate-x-1/2 z-[50] pointer-events-auto">
+              <div 
+                className={`fixed z-[1001] pointer-events-auto ${
+                  // Mobile: Position above bottom nav (60px from bottom), centered
+                  isMobile 
+                    ? 'bottom-[60px] left-1/2 transform -translate-x-1/2' 
+                    // Tablet: Center with margin
+                    : isTablet
+                    ? 'bottom-6 left-1/2 transform -translate-x-1/2'
+                    // Desktop: Center, adjust when side panel open to prevent overlap
+                    : activeRightTab !== 'dreamweaving' && (isTablet || isLaptop)
+                    ? 'bottom-8 right-[420px] left-auto transform-none'
+                    : 'bottom-8 left-1/2 transform -translate-x-1/2'
+                }`}
+                style={{
+                  transition: 'bottom 0.3s ease, right 0.3s ease, left 0.3s ease, transform 0.3s ease',
+                  // Ensure controls don't overlap with video tiles
+                  maxWidth: 'calc(100vw - 32px)',
+                }}
+              >
                 <CallControls
                   isMuted={isMuted}
                   isVideoOff={isVideoOff}
@@ -3027,7 +3048,25 @@ export default function CallRoom() {
             {/* Show controls when: call is active or waiting, regardless of active tab */}
             {(callStatus === 'active' || callStatus === 'waiting') && 
              !showBottomSheet && (
-              <div className="fixed bottom-6 sm:bottom-8 left-1/2 transform -translate-x-1/2 z-[50] pointer-events-auto">
+              <div 
+                className={`fixed z-[1001] pointer-events-auto ${
+                  // Mobile: Position above bottom nav (60px from bottom), centered
+                  isMobile 
+                    ? 'bottom-[60px] left-1/2 transform -translate-x-1/2' 
+                    // Tablet: Center with margin
+                    : isTablet
+                    ? 'bottom-6 left-1/2 transform -translate-x-1/2'
+                    // Desktop: Center, adjust when side panel open to prevent overlap
+                    : activeRightTab !== 'dreamweaving' && (isTablet || isLaptop)
+                    ? 'bottom-8 right-[420px] left-auto transform-none'
+                    : 'bottom-8 left-1/2 transform -translate-x-1/2'
+                }`}
+                style={{
+                  transition: 'bottom 0.3s ease, right 0.3s ease, left 0.3s ease, transform 0.3s ease',
+                  // Ensure controls don't overlap with video tiles
+                  maxWidth: 'calc(100vw - 32px)',
+                }}
+              >
                 <CallControls
                   isMuted={isMuted}
                   isVideoOff={isVideoOff}
@@ -3577,19 +3616,37 @@ export default function CallRoom() {
             {/* Call Controls - Show during active/waiting call on ALL tabs (Desktop) */}
             {/* Show controls when: call is active or waiting, regardless of active tab */}
             {(callStatus === 'active' || callStatus === 'waiting') && (
-              <div className="fixed bottom-6 sm:bottom-8 left-1/2 transform -translate-x-1/2 z-[50] pointer-events-auto">
-              <CallControls
-                isMuted={isMuted}
-                isVideoOff={isVideoOff}
-                onToggleMute={toggleMute}
-                onToggleVideo={toggleVideo}
-                onEndCall={handleEndCall}
-                onScreenShare={handleScreenShare}
-                onAddParticipant={handleAddParticipant}
-                onSettings={handleSettings}
-                isScreenSharing={isScreenSharing}
-              />
-            </div>
+              <div 
+                className={`fixed z-[1001] pointer-events-auto ${
+                  // Mobile: Position above bottom nav (60px from bottom), centered
+                  isMobile 
+                    ? 'bottom-[60px] left-1/2 transform -translate-x-1/2' 
+                    // Tablet: Center with margin
+                    : isTablet
+                    ? 'bottom-6 left-1/2 transform -translate-x-1/2'
+                    // Desktop: Center, adjust when side panel open to prevent overlap
+                    : activeRightTab !== 'dreamweaving' && (isTablet || isLaptop)
+                    ? 'bottom-8 right-[420px] left-auto transform-none'
+                    : 'bottom-8 left-1/2 transform -translate-x-1/2'
+                }`}
+                style={{
+                  transition: 'bottom 0.3s ease, right 0.3s ease, left 0.3s ease, transform 0.3s ease',
+                  // Ensure controls don't overlap with video tiles
+                  maxWidth: 'calc(100vw - 32px)',
+                }}
+              >
+                <CallControls
+                  isMuted={isMuted}
+                  isVideoOff={isVideoOff}
+                  onToggleMute={toggleMute}
+                  onToggleVideo={toggleVideo}
+                  onEndCall={handleEndCall}
+                  onScreenShare={handleScreenShare}
+                  onAddParticipant={handleAddParticipant}
+                  onSettings={handleSettings}
+                  isScreenSharing={isScreenSharing}
+                />
+              </div>
             )}
 
           </div>

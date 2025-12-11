@@ -420,57 +420,12 @@ export const setupSocketHandlers = (io: Server) => {
       updateNotes(room, socket.roomId, io);
     });
 
-    // End call
+    // User leaves call (but call continues for others)
     socket.on('call:end', async () => {
       if (!socket.roomId) return;
 
-      const room = rooms.get(socket.roomId);
-      if (!room) return;
-
-      room.callStarted = false;
-
-      // Update call session
-      if (room.callId) {
-        const callSession = await CallSession.findById(room.callId);
-        if (callSession) {
-          callSession.status = 'ended';
-          callSession.endedAt = new Date();
-          if (callSession.startedAt) {
-            callSession.duration = Math.floor(
-              (callSession.endedAt.getTime() - callSession.startedAt.getTime()) / 1000
-            );
-          }
-          await callSession.save();
-
-          // Final notes update
-          if (room.transcriptBuffer.length >= MIN_TRANSCRIPT_FOR_NOTES) {
-            await updateNotes(room, socket.roomId, io, true);
-          }
-
-          // Update full transcript text
-          const transcript = await Transcript.findOne({ callId: room.callId });
-          if (transcript) {
-            transcript.fullText = transcript.segments
-              .map(s => `${s.speaker}: ${s.text}`)
-              .join('\n');
-            transcript.wordCount = transcript.fullText.split(/\s+/).filter(w => w.length > 0).length;
-            await transcript.save();
-          }
-
-          // Trigger comprehensive notes generation (async, don't block)
-          if (transcript && transcript.segments && transcript.segments.length > 0) {
-            // Import and call the comprehensive notes generation
-            // This will be handled by the API endpoint when frontend requests it
-            // or we can trigger it here directly
-            console.log('[NOTES] Call ended, comprehensive notes can be generated via API');
-          }
-        }
-      }
-
-      io.to(socket.roomId).emit('call:ended', {
-        roomId: socket.roomId,
-        callId: room.callId,
-      });
+      // Use the same logic as disconnect - just remove this user
+      await handleLeaveRoom(socket, io);
     });
 
     // Join conversation (for messaging)
@@ -573,8 +528,8 @@ async function handleLeaveRoom(socket: AuthenticatedSocket, io: Server) {
       participantCount: room.participants.size,
     });
 
-    // End call if only one participant left
-    if (room.participants.size < 2 && room.callStarted) {
+    // End call only if no participants left (last person left)
+    if (room.participants.size === 0 && room.callStarted) {
       room.callStarted = false;
       
       if (room.callId) {
@@ -589,6 +544,21 @@ async function handleLeaveRoom(socket: AuthenticatedSocket, io: Server) {
           }
           await callSession.save();
           
+          // Final notes update
+          if (room.transcriptBuffer.length >= MIN_TRANSCRIPT_FOR_NOTES) {
+            await updateNotes(room, socket.roomId, io, true);
+          }
+
+          // Update full transcript text
+          const transcript = await Transcript.findOne({ callId: room.callId });
+          if (transcript) {
+            transcript.fullText = transcript.segments
+              .map(s => `${s.speaker}: ${s.text}`)
+              .join('\n');
+            transcript.wordCount = transcript.fullText.split(/\s+/).filter(w => w.length > 0).length;
+            await transcript.save();
+          }
+          
           // Attach call data to conversation if linked
           if (callSession.metadata?.conversationId) {
             await attachCallToConversation(callSession);
@@ -596,10 +566,11 @@ async function handleLeaveRoom(socket: AuthenticatedSocket, io: Server) {
         }
       }
 
+      // Emit call:ended only when room is empty (last person left)
       io.to(socket.roomId).emit('call:ended', {
         roomId: socket.roomId,
         callId: room.callId,
-        reason: 'participant_left',
+        reason: 'last_participant_left',
       });
     }
 

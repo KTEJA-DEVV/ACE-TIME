@@ -68,8 +68,7 @@ export default function CallRoom() {
   const callStore = useCallStore();
   const {
     localStream,
-    remoteStream, // Keep for backward compatibility
-    remoteStreams, // Multi-party: Map<socketId, MediaStream>
+    remoteStream,
     callStatus,
     participants,
     transcript,
@@ -493,41 +492,6 @@ export default function CallRoom() {
     };
   }, [leaveRoom]);
 
-  // Automatic video quality reduction when participant count exceeds 4 (multi-party optimization)
-  useEffect(() => {
-    if (localStream && participants.length > 4) {
-      const videoTrack = localStream.getVideoTracks()[0];
-      if (videoTrack) {
-        console.log(`[MULTI] 📉 Reducing video quality (${participants.length + 1} participants > 4)`);
-        // Reduce resolution for better performance in multi-party calls
-        videoTrack.applyConstraints({
-          width: { ideal: 640, max: 640 },
-          height: { ideal: 360, max: 360 },
-          frameRate: { ideal: 15, max: 15 },
-        }).then(() => {
-          console.log('[MULTI] ✅ Video quality reduced to 640x360@15fps');
-        }).catch((error) => {
-          console.error('[MULTI] ⚠️ Failed to reduce video quality:', error);
-        });
-      }
-    } else if (localStream && participants.length <= 4) {
-      // Restore higher quality when participant count is <= 4
-      const videoTrack = localStream.getVideoTracks()[0];
-      if (videoTrack) {
-        console.log(`[MULTI] 📈 Restoring video quality (${participants.length + 1} participants <= 4)`);
-        videoTrack.applyConstraints({
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30 },
-        }).then(() => {
-          console.log('[MULTI] ✅ Video quality restored to 1280x720@30fps');
-        }).catch((error) => {
-          console.error('[MULTI] ⚠️ Failed to restore video quality:', error);
-        });
-      }
-    }
-  }, [localStream, participants.length]);
-
   // Set up video streams with smooth transitions (prevent glitches)
   // CRITICAL: Sync state with actual track state
   useEffect(() => {
@@ -608,7 +572,7 @@ export default function CallRoom() {
     }
   }, [remoteStream]);
   
-  // Update participant streams when remote streams or participants change (multi-party mesh)
+  // Update participant streams when remote stream or participants change
   useEffect(() => {
     setParticipantStreams(prev => {
       const updated = new Map(prev);
@@ -624,26 +588,39 @@ export default function CallRoom() {
         });
       }
       
-      // Track remote participants' streams from remoteStreams Map (multi-party)
+      // Track remote participants' streams
+      if (remoteStream && participants.length > 0) {
+        // Assign remote stream to first participant (for 1-on-1 calls)
+        // For multiple participants, each would need their own peer connection
+        const firstParticipant = participants[0];
+        // Only update if we don't already have a stream for this participant
+        if (!updated.has(firstParticipant.socketId) || !updated.get(firstParticipant.socketId)?.stream) {
+          updated.set(firstParticipant.socketId, {
+            stream: remoteStream,
+            isVideoOff: false, // Will be updated via socket events
+            isMuted: false, // Will be updated via socket events
+            userName: firstParticipant.userName,
+            userId: firstParticipant.userId,
+          });
+        }
+      }
+      
+      // Initialize participant entries for all participants (even without streams yet)
       participants.forEach(participant => {
-        const participantStream = remoteStreams?.get(participant.socketId);
-        const participantState = {
-          stream: participantStream || null,
-          // CRITICAL: Use participant state from store (updated by ontrack handlers and socket events)
-          // Default to video ON and audio ON (not off) - will be updated when tracks arrive
-          isVideoOff: participant.isVideoOff ?? false,
-          isMuted: participant.isMuted ?? false,
-          userName: participant.userName,
-          userId: participant.userId,
-        };
-        
-        // Update or create participant entry
-        updated.set(participant.socketId, participantState);
+        if (!updated.has(participant.socketId)) {
+          updated.set(participant.socketId, {
+            stream: null,
+            isVideoOff: false,
+            isMuted: false,
+            userName: participant.userName,
+            userId: participant.userId,
+          });
+        }
       });
       
       return updated;
     });
-  }, [remoteStreams, participants, localStream, user, isVideoOff, isMuted]);
+  }, [remoteStream, participants, localStream, user, isVideoOff, isMuted]);
 
   // Listen for participant video/audio state changes
   useEffect(() => {
@@ -3131,24 +3108,19 @@ export default function CallRoom() {
                     boxSizing: 'border-box',
                   }}
                 >
-                  {/* Remote participants - Multi-party mesh topology */}
+                  {/* Remote participants */}
                   {participants.map((participant) => {
                     const participantData = participantStreams.get(participant.socketId);
-                    // Use remoteStreams from store (multi-party) or fallback to participantStreams/local state
-                    const participantStream = remoteStreams?.get(participant.socketId) || participantData?.stream || (participants.indexOf(participant) === 0 ? remoteStream : null);
                     // Use stable key: prefer userId if available, fallback to socketId
                     const stableKey = participant.userId || participant.socketId;
-                    // CRITICAL: Use participant state from store (updated by ontrack handlers) or fallback to participantStreams
-                    const isVideoOff = participant.isVideoOff ?? participantData?.isVideoOff ?? false;
-                    const isMuted = participant.isMuted ?? participantData?.isMuted ?? false;
                     return (
                       <VideoParticipant
                         key={stableKey}
-                        stream={participantStream}
+                        stream={participantData?.stream || (participants.indexOf(participant) === 0 ? remoteStream : null)}
                         userName={participant.userName}
                         userId={participant.userId}
-                        isVideoOff={isVideoOff}
-                        isMuted={isMuted}
+                        isVideoOff={participantData?.isVideoOff || false}
+                        isMuted={participantData?.isMuted || false}
                         className="w-full max-w-full"
                       />
                     );
@@ -3705,24 +3677,19 @@ export default function CallRoom() {
                     boxSizing: 'border-box',
                   }}
                 >
-                  {/* Remote participants - Multi-party mesh topology */}
+                  {/* Remote participants */}
                   {participants.map((participant) => {
                     const participantData = participantStreams.get(participant.socketId);
-                    // Use remoteStreams from store (multi-party) or fallback to participantStreams/local state
-                    const participantStream = remoteStreams?.get(participant.socketId) || participantData?.stream || (participants.indexOf(participant) === 0 ? remoteStream : null);
                     // Use stable key: prefer userId if available, fallback to socketId
                     const stableKey = participant.userId || participant.socketId;
-                    // CRITICAL: Use participant state from store (updated by ontrack handlers) or fallback to participantStreams
-                    const isVideoOff = participant.isVideoOff ?? participantData?.isVideoOff ?? false;
-                    const isMuted = participant.isMuted ?? participantData?.isMuted ?? false;
                     return (
                       <VideoParticipant
                         key={stableKey}
-                        stream={participantStream}
+                        stream={participantData?.stream || (participants.indexOf(participant) === 0 ? remoteStream : null)}
                         userName={participant.userName}
                         userId={participant.userId}
-                        isVideoOff={isVideoOff}
-                        isMuted={isMuted}
+                        isVideoOff={participantData?.isVideoOff || false}
+                        isMuted={participantData?.isMuted || false}
                         className="w-full max-w-full"
                       />
                     );

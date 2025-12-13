@@ -39,7 +39,6 @@ const privateCallSchema = new Schema<IPrivateCall>(
     callId: {
       type: String,
       required: true,
-      unique: true,
     },
     startTime: {
       type: Date,

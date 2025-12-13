@@ -132,7 +132,6 @@ const notesSchema = new Schema<INotes>(
       ref: 'CallSession',
       required: true,
       unique: true,
-      index: true,
     },
     title: {
       type: String,

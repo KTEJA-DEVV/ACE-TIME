@@ -53,7 +53,6 @@ const transcriptSchema = new Schema<ITranscript>(
       ref: 'CallSession',
       required: true,
       unique: true,
-      index: true,
     },
     segments: [transcriptSegmentSchema],
     fullText: {
@@ -87,7 +86,7 @@ transcriptSchema.pre('save', function (next) {
 transcriptSchema.index({ fullText: 'text' });
 
 // Performance indexes for fast queries
-transcriptSchema.index({ callId: 1 }); // Already indexed via unique, but explicit for clarity
+// callId is already indexed via unique: true above
 transcriptSchema.index({ 'segments.timestamp': 1 }); // For time-based queries
 transcriptSchema.index({ 'segments.speakerId': 1 }); // For speaker-based queries
 transcriptSchema.index({ createdAt: -1 }); // For recent transcripts

@@ -69,7 +69,6 @@ interface CallState {
   localStream: MediaStream | null;
   remoteStream: MediaStream | null; // Keep for backward compatibility (1-on-1 calls)
   remoteStreams: Map<string, MediaStream>; // Map of socketId -> remote stream (for multiple participants)
-  pendingIceCandidates: Map<string, RTCIceCandidateInit[]>; // Map of socketId -> Array of queued ICE candidates
   speechRecognition: any | null;
   callRecorder: MediaRecorder | null; // For recording the call
   recordingChunks: Blob[]; // Store recording chunks
@@ -91,13 +90,6 @@ interface CallState {
   isVideoOff: boolean;
   isRecording: boolean;
   isMinimized: boolean; // For floating PiP overlay when navigating away
-  
-  // Performance optimization states
-  dominantSpeaker: string | null; // socketId of current dominant speaker
-  connectionQuality: Map<string, 'good' | 'fair' | 'poor'>; // socketId -> quality
-  reconnectionAttempts: Map<string, number>; // socketId -> retry count (max 3)
-  videoQuality: 'default' | 'medium' | 'low'; // Current video quality setting
-  monitoringIntervals: Map<string, ReturnType<typeof setInterval>>; // socketId -> interval ID
   
   error: string | null;
   
@@ -123,214 +115,24 @@ interface CallState {
   maximizeCall: () => void;
 }
 
-// Network Resilience: Include TURN server for restrictive firewalls
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
   ],
   iceCandidatePoolSize: 10, // Pre-gather candidates for faster connection
 };
 
-// Maximum participants for mesh topology (performance limitation)
-const MAX_PARTICIPANTS = 8;
-
-// Video quality presets based on participant count
-const VIDEO_QUALITY_PRESETS = {
-  default: { width: 1280, height: 720, frameRate: 30 }, // 1-3 users
-  medium: { width: 640, height: 480, frameRate: 30 },   // 4-6 users
-  low: { width: 480, height: 360, frameRate: 24 },      // 7+ users
-};
-
-export const useCallStore = create<CallState>((set, get) => {
-  // Expose debug utilities to window object in development mode
-  if (typeof window !== 'undefined' && (import.meta.env.DEV || import.meta.env.MODE === 'development')) {
-    (window as any).__callStoreDebug = {
-      getState: () => get(),
-      getPeerConnections: () => {
-        const state = get();
-        const pcs: Record<string, any> = {};
-        state.peerConnections.forEach((pc, socketId) => {
-          const participant = state.participants.find(p => p.socketId === socketId);
-          pcs[socketId] = {
-            connectionState: pc.connectionState,
-            iceConnectionState: pc.iceConnectionState,
-            signalingState: pc.signalingState,
-            iceGatheringState: pc.iceGatheringState,
-            participant: participant?.userName || 'Unknown',
-            stats: null, // Will be populated by getStats()
-          };
-        });
-        return pcs;
-      },
-      getConnectionQuality: () => {
-        const state = get();
-        const quality: Record<string, any> = {};
-        state.connectionQuality.forEach((q, socketId) => {
-          const participant = state.participants.find(p => p.socketId === socketId);
-          quality[socketId] = {
-            quality: q,
-            participant: participant?.userName || 'Unknown',
-          };
-        });
-        return quality;
-      },
-      getStats: async (socketId?: string) => {
-        const state = get();
-        if (socketId) {
-          const pc = state.peerConnections.get(socketId);
-          if (pc) {
-            const stats = await pc.getStats();
-            const result: any = {};
-            stats.forEach((report: any) => {
-              if (!result[report.type]) result[report.type] = [];
-              result[report.type].push(report);
-            });
-            return result;
-          }
-          return null;
-        }
-        // Get stats for all connections
-        const allStats: Record<string, any> = {};
-        for (const [id, pc] of state.peerConnections.entries()) {
-          try {
-            const stats = await pc.getStats();
-            const result: any = {};
-            stats.forEach((report: any) => {
-              if (!result[report.type]) result[report.type] = [];
-              result[report.type].push(report);
-            });
-            allStats[id] = result;
-          } catch (error) {
-            allStats[id] = { error: (error as Error).message };
-          }
-        }
-        return allStats;
-      },
-      getRemoteStreams: () => {
-        const state = get();
-        const streams: Record<string, any> = {};
-        state.remoteStreams.forEach((stream, socketId) => {
-          const participant = state.participants.find(p => p.socketId === socketId);
-          streams[socketId] = {
-            id: stream.id,
-            active: stream.active,
-            videoTracks: stream.getVideoTracks().length,
-            audioTracks: stream.getAudioTracks().length,
-            participant: participant?.userName || 'Unknown',
-          };
-        });
-        return streams;
-      },
-      getParticipants: () => get().participants,
-      getDominantSpeaker: () => {
-        const state = get();
-        const speaker = state.dominantSpeaker;
-        const participant = speaker ? state.participants.find(p => p.socketId === speaker) : null;
-        return speaker ? {
-          socketId: speaker,
-          userName: participant?.userName || 'Unknown',
-        } : null;
-      },
-      getVideoQuality: () => get().videoQuality,
-      getReconnectionAttempts: () => {
-        const state = get();
-        const attempts: Record<string, any> = {};
-        state.reconnectionAttempts.forEach((count, socketId) => {
-          const participant = state.participants.find(p => p.socketId === socketId);
-          attempts[socketId] = {
-            attempts: count,
-            participant: participant?.userName || 'Unknown',
-          };
-        });
-        return attempts;
-      },
-      forceQualityChange: async (participantCount: number) => {
-        const { localStream } = get();
-        if (!localStream) {
-          console.warn('[DEBUG] No local stream available');
-          return;
-        }
-        const quality = participantCount >= 7 
-          ? VIDEO_QUALITY_PRESETS.low 
-          : participantCount >= 4 
-          ? VIDEO_QUALITY_PRESETS.medium 
-          : VIDEO_QUALITY_PRESETS.default;
-        
-        const videoTrack = localStream.getVideoTracks()[0];
-        if (videoTrack) {
-          try {
-            await videoTrack.applyConstraints({
-              width: { ideal: quality.width },
-              height: { ideal: quality.height },
-              frameRate: { ideal: quality.frameRate },
-            });
-            console.log(`[DEBUG] Forced quality change: ${quality.width}x${quality.height} @ ${quality.frameRate}fps`);
-          } catch (error: any) {
-            console.error('[DEBUG] Error forcing quality change:', error.message);
-          }
-        }
-      },
-      logSummary: () => {
-        const state = get();
-        console.group('🔍 Call Store Debug Summary');
-        console.log('Participants:', state.participants.length);
-        console.log('Peer Connections:', state.peerConnections.size);
-        console.log('Remote Streams:', state.remoteStreams.size);
-        console.log('Video Quality:', state.videoQuality);
-        console.log('Dominant Speaker:', state.dominantSpeaker ? state.participants.find(p => p.socketId === state.dominantSpeaker)?.userName : 'None');
-        console.log('Connection Quality:', Object.fromEntries(state.connectionQuality));
-        console.log('Reconnection Attempts:', Object.fromEntries(state.reconnectionAttempts));
-        console.groupEnd();
-      },
-      help: () => {
-        console.log(`
-🔧 Call Store Debug Utilities
-
-Available commands:
-  __callStoreDebug.getState()                    - Get full store state
-  __callStoreDebug.getPeerConnections()          - Get peer connection status
-  __callStoreDebug.getConnectionQuality()        - Get connection quality for each peer
-  __callStoreDebug.getStats(socketId?)           - Get WebRTC stats (all or specific peer)
-  __callStoreDebug.getRemoteStreams()            - Get remote stream information
-  __callStoreDebug.getParticipants()             - Get participants list
-  __callStoreDebug.getDominantSpeaker()          - Get current dominant speaker
-  __callStoreDebug.getVideoQuality()             - Get current video quality setting
-  __callStoreDebug.getReconnectionAttempts()     - Get reconnection attempt counts
-  __callStoreDebug.forceQualityChange(count)     - Force video quality change (for testing)
-  __callStoreDebug.logSummary()                  - Log summary of current state
-  __callStoreDebug.help()                        - Show this help message
-
-Examples:
-  __callStoreDebug.logSummary()
-  __callStoreDebug.getStats()
-  __callStoreDebug.forceQualityChange(5)
-        `);
-      },
-    };
-    
-    // Show help on first load
-    console.log('🔧 Call Store Debug utilities available! Type __callStoreDebug.help() for commands.');
-  }
-
-  return {
+export const useCallStore = create<CallState>((set, get) => ({
   socket: null,
   peerConnection: null,
   peerConnections: new Map<string, RTCPeerConnection>(),
   localStream: null,
   remoteStream: null,
   remoteStreams: new Map<string, MediaStream>(),
-  pendingIceCandidates: new Map<string, RTCIceCandidateInit[]>(),
   speechRecognition: null,
   callRecorder: null,
   recordingChunks: [],
@@ -352,13 +154,6 @@ Examples:
   isVideoOff: false,
   isRecording: false,
   isMinimized: false,
-  
-  // Performance optimization states
-  dominantSpeaker: null,
-  connectionQuality: new Map<string, 'good' | 'fair' | 'poor'>(),
-  reconnectionAttempts: new Map<string, number>(),
-  videoQuality: 'default',
-  monitoringIntervals: new Map<string, ReturnType<typeof setInterval>>(),
   
   error: null,
 
@@ -495,590 +290,6 @@ Examples:
       toast.error('Error', message);
     });
 
-    // ========== PERFORMANCE OPTIMIZATION HELPER FUNCTIONS ==========
-    
-    /**
-     * Get adaptive video quality based on participant count
-     */
-    const getAdaptiveVideoQuality = (participantCount: number): { width: number; height: number; frameRate: number } => {
-      if (participantCount >= 7) {
-        return VIDEO_QUALITY_PRESETS.low;
-      } else if (participantCount >= 4) {
-        return VIDEO_QUALITY_PRESETS.medium;
-      }
-      return VIDEO_QUALITY_PRESETS.default;
-    };
-
-    /**
-     * Apply adaptive video quality to local stream
-     */
-    const applyAdaptiveVideoQuality = async (participantCount: number): Promise<void> => {
-      const { localStream } = get();
-      if (!localStream) return;
-
-      const quality = getAdaptiveVideoQuality(participantCount + 1); // +1 for self
-      const videoTrack = localStream.getVideoTracks()[0];
-      
-      if (!videoTrack) return;
-
-      try {
-        await videoTrack.applyConstraints({
-          width: { ideal: quality.width },
-          height: { ideal: quality.height },
-          frameRate: { ideal: quality.frameRate },
-        });
-        console.log(`[OPTIMIZATION] Applied video quality: ${quality.width}x${quality.height} @ ${quality.frameRate}fps (${participantCount + 1} participants)`);
-        
-        // Update quality state
-        const qualityLevel = participantCount >= 7 ? 'low' : participantCount >= 4 ? 'medium' : 'default';
-        set({ videoQuality: qualityLevel });
-      } catch (error: any) {
-        console.error('[OPTIMIZATION] Error applying video constraints:', error.message);
-      }
-    };
-
-    /**
-     * Monitor connection quality using getStats() API
-     */
-    const monitorConnectionQuality = (socketId: string, pc: RTCPeerConnection): void => {
-      const intervalId = setInterval(async () => {
-        try {
-          const stats = await pc.getStats();
-          let packetsLost = 0;
-          let packetsReceived = 0;
-          let jitter = 0;
-
-          stats.forEach((report: any) => {
-            if (report.type === 'inbound-rtp' && report.mediaType === 'video') {
-              packetsLost += report.packetsLost || 0;
-              packetsReceived += report.packetsReceived || 0;
-              jitter += report.jitter || 0;
-            }
-            if (report.type === 'inbound-rtp' && report.mediaType === 'audio') {
-              packetsLost += report.packetsLost || 0;
-              packetsReceived += report.packetsReceived || 0;
-              jitter += report.jitter || 0;
-            }
-          });
-
-          const totalPackets = packetsLost + packetsReceived;
-          const packetLossRate = totalPackets > 0 ? packetsLost / totalPackets : 0;
-          
-          // Determine quality based on packet loss and jitter
-          let quality: 'good' | 'fair' | 'poor' = 'good';
-          if (packetLossRate > 0.05 || jitter > 50) {
-            quality = 'poor';
-          } else if (packetLossRate > 0.02 || jitter > 20) {
-            quality = 'fair';
-          }
-
-          const { connectionQuality } = get();
-          const updatedQuality = new Map(connectionQuality);
-          updatedQuality.set(socketId, quality);
-          set({ connectionQuality: updatedQuality });
-
-          // Auto-reduce quality for poor connections
-          if (quality === 'poor') {
-            const { remoteStreams } = get();
-            const remoteStream = remoteStreams.get(socketId);
-            if (remoteStream) {
-              const videoTrack = remoteStream.getVideoTracks()[0];
-              if (videoTrack) {
-                try {
-                  await videoTrack.applyConstraints({
-                    width: { ideal: 480 },
-                    height: { ideal: 360 },
-                    frameRate: { ideal: 20 },
-                  });
-                  console.log(`[OPTIMIZATION] Reduced quality for ${socketId} due to poor connection`);
-                } catch (error: any) {
-                  console.error('[OPTIMIZATION] Error reducing quality:', error.message);
-                }
-              }
-            }
-          }
-        } catch (error: any) {
-          console.error(`[OPTIMIZATION] Error monitoring connection quality for ${socketId}:`, error.message);
-        }
-      }, 5000); // Check every 5 seconds
-
-      // Store interval ID for cleanup
-      const { monitoringIntervals } = get();
-      const updatedIntervals = new Map(monitoringIntervals);
-      updatedIntervals.set(socketId, intervalId);
-      set({ monitoringIntervals: updatedIntervals });
-    };
-
-    /**
-     * Detect dominant speaker using Web Audio API
-     */
-    const setupDominantSpeakerDetection = (socketId: string, stream: MediaStream): void => {
-      try {
-        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-        const analyser = audioContext.createAnalyser();
-        analyser.fftSize = 256;
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
-        
-        const source = audioContext.createMediaStreamSource(stream);
-        source.connect(analyser);
-
-        const checkAudioLevel = () => {
-          analyser.getByteFrequencyData(dataArray);
-          const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
-          
-          // Threshold for "speaking" (adjust based on testing)
-          if (average > 30) {
-            const { dominantSpeaker } = get();
-            if (dominantSpeaker !== socketId) {
-              set({ dominantSpeaker: socketId });
-              console.log(`[OPTIMIZATION] Dominant speaker changed to ${socketId}`);
-            }
-          }
-        };
-
-        const intervalId = setInterval(checkAudioLevel, 200); // Check every 200ms
-        
-        // Clean up when stream ends
-        stream.getAudioTracks()[0]?.addEventListener('ended', () => {
-          clearInterval(intervalId);
-          audioContext.close();
-        });
-      } catch (error: any) {
-        console.error(`[OPTIMIZATION] Error setting up dominant speaker detection for ${socketId}:`, error.message);
-      }
-    };
-
-
-    // ========== MESH TOPOLOGY HELPER FUNCTIONS ==========
-    
-    /**
-     * Create a peer connection for a specific remote socket (mesh topology)
-     */
-    const createPeerConnection = (remoteSocketId: string): RTCPeerConnection => {
-      const { peerConnections, localStream, socket: currentSocket } = get();
-      
-      // Don't create duplicate connections
-      if (peerConnections.has(remoteSocketId)) {
-        console.log(`[MESH] Peer connection already exists for ${remoteSocketId}`);
-        return peerConnections.get(remoteSocketId)!;
-      }
-
-      console.log(`[MESH] Creating new peer connection for ${remoteSocketId}`);
-      
-      // Create new peer connection
-      const pc = new RTCPeerConnection(ICE_SERVERS);
-
-      // Add local stream tracks
-      if (localStream) {
-        localStream.getTracks().forEach(track => {
-          pc.addTrack(track, localStream);
-          console.log(`[MESH] Added ${track.kind} track to peer connection for ${remoteSocketId}`);
-        });
-      }
-
-      // Handle ICE candidates
-      pc.onicecandidate = (event) => {
-        if (event.candidate && currentSocket && currentSocket.connected) {
-          console.log(`[MESH] Sending ICE candidate from ${socket.id} to ${remoteSocketId}`);
-          currentSocket.emit('ice-candidate', {
-            to: remoteSocketId,
-            candidate: event.candidate,
-            from: socket.id,
-          });
-        }
-      };
-
-      // Handle remote stream
-      pc.ontrack = (event) => {
-        console.log(`[MESH] Received remote track from ${remoteSocketId}`);
-        if (event.streams && event.streams[0]) {
-          const { remoteStreams } = get();
-          const updatedRemoteStreams = new Map(remoteStreams);
-          updatedRemoteStreams.set(remoteSocketId, event.streams[0]);
-          set({ remoteStreams: updatedRemoteStreams });
-          
-          // Set up dominant speaker detection for audio tracks
-          const audioTracks = event.streams[0].getAudioTracks();
-          if (audioTracks.length > 0) {
-            setupDominantSpeakerDetection(remoteSocketId, event.streams[0]);
-          }
-          
-          // Start connection quality monitoring
-          monitorConnectionQuality(remoteSocketId, pc);
-          
-          // Also update participants list to trigger UI update
-          const { participants } = get();
-          const participant = participants.find(p => p.socketId === remoteSocketId);
-          if (!participant) {
-            console.warn(`[MESH] Received track from unknown participant: ${remoteSocketId}`);
-          }
-        }
-      };
-
-      // Handle connection state changes with error recovery
-      pc.onconnectionstatechange = () => {
-        console.log(`[MESH] Peer connection state with ${remoteSocketId}: ${pc.connectionState}`);
-        if (pc.connectionState === 'connected') {
-          console.log(`[MESH] ✅ Connected to ${remoteSocketId}`);
-          // Reset reconnection attempts on successful connection
-          const { reconnectionAttempts } = get();
-          const updatedAttempts = new Map(reconnectionAttempts);
-          updatedAttempts.delete(remoteSocketId);
-          set({ reconnectionAttempts: updatedAttempts });
-          
-          // Start connection quality monitoring
-          monitorConnectionQuality(remoteSocketId, pc);
-        } else if (pc.connectionState === 'failed') {
-          console.warn(`[MESH] ⚠️ Connection failed with ${remoteSocketId}, attempting reconnection...`);
-          // Attempt automatic reconnection (using the version defined after createPeerConnection)
-          attemptReconnectionAfter(remoteSocketId);
-        } else if (pc.connectionState === 'disconnected') {
-          console.warn(`[MESH] ⚠️ Connection disconnected with ${remoteSocketId}`);
-          // Stop monitoring
-          const { monitoringIntervals } = get();
-          const intervalId = monitoringIntervals.get(remoteSocketId);
-          if (intervalId) {
-            clearInterval(intervalId);
-            const updatedIntervals = new Map(monitoringIntervals);
-            updatedIntervals.delete(remoteSocketId);
-            set({ monitoringIntervals: updatedIntervals });
-          }
-        }
-      };
-
-      // Store peer connection
-      const updatedPeerConnections = new Map(peerConnections);
-      updatedPeerConnections.set(remoteSocketId, pc);
-      set({ peerConnections: updatedPeerConnections });
-
-      // Initialize pending ICE candidates queue
-      const { pendingIceCandidates } = get();
-      const updatedPendingCandidates = new Map(pendingIceCandidates);
-      if (!updatedPendingCandidates.has(remoteSocketId)) {
-        updatedPendingCandidates.set(remoteSocketId, []);
-      }
-      set({ pendingIceCandidates: updatedPendingCandidates });
-
-      return pc;
-    };
-
-    /**
-     * Process queued ICE candidates for a peer connection
-     */
-    const processQueuedIceCandidates = async (socketId: string): Promise<void> => {
-      const { peerConnections, pendingIceCandidates } = get();
-      const pc = peerConnections.get(socketId);
-      if (!pc) {
-        console.warn(`[MESH] Cannot process queued ICE candidates - no peer connection for ${socketId}`);
-        return;
-      }
-
-      const queued = pendingIceCandidates.get(socketId) || [];
-      if (queued.length === 0) {
-        return;
-      }
-
-      console.log(`[MESH] Processing ${queued.length} queued ICE candidates for ${socketId}`);
-
-      for (const candidate of queued) {
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(candidate));
-          console.log(`[MESH] ✅ Added queued ICE candidate for ${socketId}`);
-        } catch (error: any) {
-          console.error(`[MESH] ❌ Error adding queued ICE candidate for ${socketId}:`, error.message);
-        }
-      }
-
-      // Clear queue
-      const updatedPendingCandidates = new Map(pendingIceCandidates);
-      updatedPendingCandidates.set(socketId, []);
-      set({ pendingIceCandidates: updatedPendingCandidates });
-    };
-
-    /**
-     * Attempt to reconnect a failed peer connection (moved here to avoid circular dependency)
-     */
-    const attemptReconnectionAfter = async (socketId: string): Promise<void> => {
-      const { reconnectionAttempts, socket: currentSocket } = get();
-      const attempts = reconnectionAttempts.get(socketId) || 0;
-      
-      if (attempts >= 3) {
-        const { participants } = get();
-        const participantName = participants.find((p: Participant) => p.socketId === socketId)?.userName || 'participant';
-        console.error(`[RECOVERY] Max reconnection attempts reached for ${socketId}`);
-        toast.error('Connection Failed', `Unable to reconnect to ${participantName}`);
-        return;
-      }
-
-      console.log(`[RECOVERY] Attempting reconnection ${attempts + 1}/3 for ${socketId}`);
-      
-      const updatedAttempts = new Map(reconnectionAttempts);
-      updatedAttempts.set(socketId, attempts + 1);
-      set({ reconnectionAttempts: updatedAttempts });
-
-      try {
-        // Close failed connection
-        const { peerConnections } = get();
-        const oldPc = peerConnections.get(socketId);
-        if (oldPc) {
-          oldPc.close();
-        }
-
-        // Remove from Maps
-        const updatedPeerConnections = new Map(peerConnections);
-        updatedPeerConnections.delete(socketId);
-        set({ peerConnections: updatedPeerConnections });
-
-        // Wait a bit before retrying
-        await new Promise(resolve => setTimeout(resolve, 2000));
-
-        // Create new peer connection using the helper function (now it's defined)
-        const newPc = createPeerConnection(socketId);
-
-        // Send new offer
-        const offer = await newPc.createOffer({
-          offerToReceiveAudio: true,
-          offerToReceiveVideo: true,
-        });
-
-        await newPc.setLocalDescription(offer);
-
-        if (currentSocket && currentSocket.connected) {
-          currentSocket.emit('offer', {
-            to: socketId,
-            offer: newPc.localDescription,
-            from: currentSocket.id,
-          });
-          console.log(`[RECOVERY] Sent reconnection offer to ${socketId}`);
-        }
-      } catch (error: any) {
-        console.error(`[RECOVERY] Error during reconnection attempt for ${socketId}:`, error.message);
-      }
-    };
-
-    // ========== MESH TOPOLOGY SOCKET EVENT HANDLERS ==========
-
-    /**
-     * Handle 'room-users' event - existing users when joining (MESH TOPOLOGY)
-     * Joining user receives list of existing users and creates offers for each
-     */
-    socket.on('room:users', async (data: { users: Array<{ socketId: string; userId: string; userName: string }> }) => {
-      console.log(`[MESH] Received room-users event with ${data.users.length} existing users`);
-      
-      const { localStream } = get();
-      if (!localStream) {
-        console.error('[MESH] Cannot create peer connections - no local stream');
-        return;
-      }
-
-      // Check participant limit (Memory Management)
-      const totalParticipants = data.users.length + 1; // +1 for self
-      if (totalParticipants > MAX_PARTICIPANTS) {
-        toast.warning('Participant Limit', `Maximum ${MAX_PARTICIPANTS} participants reached. Consider using breakout rooms.`);
-        console.warn(`[OPTIMIZATION] Participant limit exceeded: ${totalParticipants}/${MAX_PARTICIPANTS}`);
-        return;
-      }
-
-      // Apply adaptive video quality based on participant count
-      await applyAdaptiveVideoQuality(data.users.length);
-
-      // For each existing user, create peer connection and send offer
-      for (const user of data.users) {
-        console.log(`[MESH] Creating peer connection and sending offer to ${user.socketId} (${user.userName})`);
-        
-        try {
-          const pc = createPeerConnection(user.socketId);
-          
-          // Create offer
-          const offer = await pc.createOffer({
-            offerToReceiveAudio: true,
-            offerToReceiveVideo: true,
-          });
-          
-          // Set local description
-          await pc.setLocalDescription(offer);
-          
-          // Send offer
-          socket.emit('offer', {
-            to: user.socketId,
-            offer: pc.localDescription,
-            from: socket.id,
-          });
-          
-          console.log(`[MESH] ✅ Sent offer to ${user.socketId}`);
-        } catch (error: any) {
-          console.error(`[MESH] ❌ Error creating offer for ${user.socketId}:`, error.message);
-        }
-      }
-    });
-
-    /**
-     * Handle 'offer' event - receive offer from another user (MESH TOPOLOGY)
-     */
-    socket.on('offer', async (data: { from: string; offer: RTCSessionDescriptionInit }) => {
-      const { from: senderSocketId, offer: sdpOffer } = data;
-      console.log(`[MESH] Received offer from ${senderSocketId}`);
-
-      const { localStream } = get();
-      if (!localStream) {
-        console.error('[MESH] Cannot handle offer - no local stream');
-        return;
-      }
-
-      try {
-        // Get or create peer connection
-        const pc = createPeerConnection(senderSocketId);
-        
-        // Set remote description
-        await pc.setRemoteDescription(new RTCSessionDescription(sdpOffer));
-        console.log(`[MESH] ✅ Set remote description from ${senderSocketId}`);
-        
-        // Process any queued ICE candidates
-        await processQueuedIceCandidates(senderSocketId);
-        
-        // Create answer
-        const answer = await pc.createAnswer({
-          offerToReceiveAudio: true,
-          offerToReceiveVideo: true,
-        });
-        
-        // Set local description
-        await pc.setLocalDescription(answer);
-        
-        // Send answer
-        socket.emit('answer', {
-          to: senderSocketId,
-          answer: pc.localDescription,
-          from: socket.id,
-        });
-        
-        console.log(`[MESH] ✅ Sent answer to ${senderSocketId}`);
-      } catch (error: any) {
-        console.error(`[MESH] ❌ Error handling offer from ${senderSocketId}:`, error.message);
-      }
-    });
-
-    /**
-     * Handle 'answer' event - receive answer to our offer (MESH TOPOLOGY)
-     */
-    socket.on('answer', async (data: { from: string; answer: RTCSessionDescriptionInit }) => {
-      const { from: senderSocketId, answer: sdpAnswer } = data;
-      console.log(`[MESH] Received answer from ${senderSocketId}`);
-
-      const { peerConnections } = get();
-      const pc = peerConnections.get(senderSocketId);
-      
-      if (!pc) {
-        console.error(`[MESH] Cannot handle answer - no peer connection for ${senderSocketId}`);
-        return;
-      }
-
-      try {
-        // Set remote description
-        await pc.setRemoteDescription(new RTCSessionDescription(sdpAnswer));
-        console.log(`[MESH] ✅ Set remote answer from ${senderSocketId}`);
-        
-        // Process any queued ICE candidates
-        await processQueuedIceCandidates(senderSocketId);
-        
-        console.log(`[MESH] ✅ Connection established with ${senderSocketId}`);
-      } catch (error: any) {
-        console.error(`[MESH] ❌ Error handling answer from ${senderSocketId}:`, error.message);
-      }
-    });
-
-    /**
-     * Handle 'ice-candidate' event - receive ICE candidate (MESH TOPOLOGY)
-     */
-    socket.on('ice-candidate', async (data: { from: string; candidate: RTCIceCandidateInit | null }) => {
-      const { from: senderSocketId, candidate } = data;
-      
-      if (!candidate) {
-        console.log(`[MESH] Received null ICE candidate (end of candidates) from ${senderSocketId}`);
-        return;
-      }
-
-      const { peerConnections } = get();
-      const pc = peerConnections.get(senderSocketId);
-      
-      if (!pc) {
-        console.warn(`[MESH] Cannot add ICE candidate - no peer connection for ${senderSocketId}, queuing`);
-        // Queue candidate for later
-        const { pendingIceCandidates } = get();
-        const updatedPendingCandidates = new Map(pendingIceCandidates);
-        const queue = updatedPendingCandidates.get(senderSocketId) || [];
-        queue.push(candidate);
-        updatedPendingCandidates.set(senderSocketId, queue);
-        set({ pendingIceCandidates: updatedPendingCandidates });
-        return;
-      }
-
-      try {
-        // Check if remote description is set
-        if (pc.remoteDescription) {
-          // Add candidate immediately
-          await pc.addIceCandidate(new RTCIceCandidate(candidate));
-          console.log(`[MESH] ✅ Added ICE candidate from ${senderSocketId}`);
-        } else {
-          // Queue candidate
-          console.log(`[MESH] Remote description not set yet, queuing ICE candidate from ${senderSocketId}`);
-          const { pendingIceCandidates } = get();
-          const updatedPendingCandidates = new Map(pendingIceCandidates);
-          const queue = updatedPendingCandidates.get(senderSocketId) || [];
-          queue.push(candidate);
-          updatedPendingCandidates.set(senderSocketId, queue);
-          set({ pendingIceCandidates: updatedPendingCandidates });
-        }
-      } catch (error: any) {
-        if (error.message?.includes('duplicate') || error.message?.includes('Invalid')) {
-          console.log(`[MESH] ℹ️ Ignoring duplicate/invalid ICE candidate from ${senderSocketId}`);
-        } else {
-          console.error(`[MESH] ❌ Error adding ICE candidate from ${senderSocketId}:`, error.message);
-        }
-      }
-    });
-
-    /**
-     * Handle 'user-left' event - user disconnected (MESH TOPOLOGY)
-     */
-    socket.on('user-left', (data: { socketId: string; userId?: string }) => {
-      const { socketId: leavingSocketId } = data;
-      console.log(`[MESH] User ${leavingSocketId} left, cleaning up connection`);
-
-      const { peerConnections, remoteStreams, participants } = get();
-      
-      // Close and remove peer connection
-      const pc = peerConnections.get(leavingSocketId);
-      if (pc) {
-        pc.close();
-        console.log(`[MESH] Closed peer connection to ${leavingSocketId}`);
-      }
-      
-      const updatedPeerConnections = new Map(peerConnections);
-      updatedPeerConnections.delete(leavingSocketId);
-      
-      // Remove remote stream
-      const updatedRemoteStreams = new Map(remoteStreams);
-      updatedRemoteStreams.delete(leavingSocketId);
-      
-      // Remove from participants list
-      const updatedParticipants = participants.filter(p => p.socketId !== leavingSocketId);
-      
-      // Clean up pending ICE candidates
-      const { pendingIceCandidates } = get();
-      const updatedPendingCandidates = new Map(pendingIceCandidates);
-      updatedPendingCandidates.delete(leavingSocketId);
-      
-      set({
-        peerConnections: updatedPeerConnections,
-        remoteStreams: updatedRemoteStreams,
-        participants: updatedParticipants,
-        pendingIceCandidates: updatedPendingCandidates,
-      });
-    });
-
-    // ========== END MESH TOPOLOGY HANDLERS ==========
-
     socket.on('room:joined', (data) => {
       // Filter out current user from participants list and remove duplicates
       const authUser = useAuthStore.getState().user;
@@ -1124,7 +335,12 @@ Examples:
         return;
       }
       
-      console.log(`[MESH] 🎉 New user joined: ${data.socketId} (${data.userName}), waiting for their offer`);
+      console.log('[ROOM] 🎉 ========== USER JOINED EVENT ==========');
+      console.log('[ROOM] 🎉 User details:', {
+        socketId: data.socketId,
+        userName: data.userName,
+        userId: data.userId,
+      });
       
       set((state) => {
         // CRITICAL: Deduplicate by userId (most reliable identifier)
@@ -1149,13 +365,7 @@ Examples:
         };
       });
       
-      // MESH TOPOLOGY: Create peer connection but DON'T create offer
-      // The new user will send us an offer, we'll respond with an answer
       const { peerConnection, localStream } = get();
-      if (localStream) {
-        console.log(`[MESH] Preparing to receive offer from ${data.socketId}`);
-        // Peer connection will be created when we receive their offer
-      }
       console.log('[WEBRTC] 🔍 Checking peer connection and local stream:', {
         hasPeerConnection: !!peerConnection,
         hasLocalStream: !!localStream,
@@ -2279,43 +1489,27 @@ Examples:
       };
 
       set({
-        peerConnection: pc, // Keep for backward compatibility
-        peerConnections: new Map(), // Initialize empty Map for mesh topology
+        peerConnection: pc,
         localStream: stream,
-        remoteStreams: new Map(), // Initialize empty Map for mesh topology
-        pendingIceCandidates: new Map(), // Initialize empty Map for queued ICE candidates
         // CRITICAL: Initialize mute/video state from actual track state
         // If no track exists, default to muted/off (true). Otherwise, check if track is enabled.
         isMuted: stream.getAudioTracks().length === 0 || !stream.getAudioTracks()[0]?.enabled,
         isVideoOff: stream.getVideoTracks().length === 0 || !stream.getVideoTracks()[0]?.enabled,
       });
 
-      // Ensure socket is connected before emitting room:join (with userId/userName for mesh topology)
-      const { socket: currentSocket, userName } = get();
-      const authUser = useAuthStore.getState().user;
-      const userId = authUser?._id || currentSocket?.id;
-      
+      // Ensure socket is connected before emitting room:join
+      const { socket: currentSocket } = get();
       if (currentSocket && currentSocket.connected) {
-        console.log('[JOIN] ✅ Emitting room:join with connected socket (mesh topology)');
-        currentSocket.emit('room:join', { 
-          roomId,
-          userId: userId || `user-${currentSocket.id}`,
-          userName: userName || 'User'
-        });
+        console.log('[JOIN] ✅ Emitting room:join with connected socket');
+        currentSocket.emit('room:join', { roomId });
       } else {
         console.warn('[JOIN] ⚠️ Socket not connected, waiting...');
         // Wait for socket and then emit
         const waitAndEmit = setInterval(() => {
-          const { socket: checkSocket, userName: checkUserName } = get();
+          const { socket: checkSocket } = get();
           if (checkSocket && checkSocket.connected) {
-            const authUser = useAuthStore.getState().user;
-            const userId = authUser?._id || checkSocket.id;
-            console.log('[JOIN] ✅ Socket connected, emitting room:join now (mesh topology)');
-            checkSocket.emit('room:join', { 
-              roomId,
-              userId: userId || `user-${checkSocket.id}`,
-              userName: checkUserName || 'User'
-            });
+            console.log('[JOIN] ✅ Socket connected, emitting room:join now');
+            checkSocket.emit('room:join', { roomId });
             clearInterval(waitAndEmit);
           }
         }, 100);
@@ -2344,7 +1538,7 @@ Examples:
   },
 
   leaveRoom: async () => {
-    const { socket, roomId, localStream, peerConnection, peerConnections } = get();
+    const { socket, roomId, localStream, peerConnection } = get();
     
     console.log('[LEAVE] Leaving room:', roomId);
     
@@ -2355,8 +1549,8 @@ Examples:
     
     // Emit leave event (but don't disconnect socket - let it reconnect)
     if (socket && roomId && socket.connected) {
-      console.log('[LEAVE] Emitting leave-room event (mesh topology)');
-      socket.emit('leave-room', { roomId });
+      console.log('[LEAVE] Emitting room:leave event');
+      socket.emit('room:leave');
     }
     
     // Stop all media tracks immediately
@@ -2367,23 +1561,10 @@ Examples:
       });
     }
     
-      // Close all peer connections (mesh topology cleanup)
-      peerConnections.forEach((pc, socketId) => {
-        pc.close();
-        console.log(`[LEAVE] Closed peer connection to ${socketId}`);
-      });
-
-      // Clean up monitoring intervals
-      const { monitoringIntervals } = get();
-      monitoringIntervals.forEach((intervalId, socketId) => {
-        clearInterval(intervalId);
-        console.log(`[LEAVE] Stopped monitoring for ${socketId}`);
-      });
-    
-    // Close legacy peer connection
+    // Close peer connection
     if (peerConnection) {
       peerConnection.close();
-      console.log('[LEAVE] Closed legacy peer connection');
+      console.log('[LEAVE] Closed peer connection');
     }
     
     // Don't disconnect socket - let it stay connected for reconnection
@@ -2392,11 +1573,8 @@ Examples:
     // Reset call state but keep socket for potential reconnection
     set({
       peerConnection: null,
-      peerConnections: new Map(),
       localStream: null,
       remoteStream: null,
-      remoteStreams: new Map(),
-      pendingIceCandidates: new Map(),
       roomId: null,
       callId: null,
       isHost: false,
@@ -3338,6 +2516,5 @@ Examples:
   maximizeCall: () => {
     set({ isMinimized: false });
   },
-  };
-});
+}));
 

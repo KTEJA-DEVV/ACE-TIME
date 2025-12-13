@@ -35,10 +35,6 @@ interface RoomState {
 
 const rooms = new Map<string, RoomState>();
 
-// Mesh topology helper Maps for multi-user support
-const socketToRoom = new Map<string, string>(); // socketId -> roomId (for quick lookup)
-const socketToUser = new Map<string, { userId: string; userName: string }>(); // socketId -> { userId, userName }
-
 // Track online users (userId -> socketId[])
 const onlineUsers = new Map<string, Set<string>>();
 
@@ -86,24 +82,12 @@ export const setupSocketHandlers = (io: Server) => {
       socket.join(`user:${socket.userId}`);
     }
 
-    // Join a room (Enhanced for Multi-User Mesh Topology)
-    socket.on('room:join', async (data: { roomId: string; userId?: string; userName?: string }) => {
-      const { roomId, userId, userName } = data;
+    // Join a room
+    socket.on('room:join', async (data: { roomId: string; userName?: string }) => {
+      const { roomId, userName } = data;
       
-      // Update socket user info if provided (backward compatible)
-      if (userId) {
-        socket.userId = userId;
-      }
       if (userName) {
         socket.userName = userName;
-      }
-      
-      // Ensure socket has userId and userName (fallback to existing values)
-      if (!socket.userId) {
-        socket.userId = `anon-${socket.id}`;
-      }
-      if (!socket.userName) {
-        socket.userName = 'Anonymous';
       }
 
       // Leave previous room if any
@@ -113,9 +97,10 @@ export const setupSocketHandlers = (io: Server) => {
         if (prevRoom) {
           prevRoom.participants.delete(socket.id);
         }
-        socketToRoom.delete(socket.id);
-        socketToUser.delete(socket.id);
       }
+
+      socket.roomId = roomId;
+      socket.join(roomId);
 
       // Initialize room state if needed
       if (!rooms.has(roomId)) {
@@ -130,36 +115,6 @@ export const setupSocketHandlers = (io: Server) => {
       }
 
       const room = rooms.get(roomId)!;
-
-      // Check room capacity (max 8 users for mesh topology)
-      if (room.participants.size >= 8) {
-        socket.emit('room:full', {
-          message: 'Room has reached maximum capacity (8 users)',
-          roomId,
-        });
-        console.log(`❌ Room ${roomId} is full, rejecting ${socket.userName}`);
-        return;
-      }
-
-      // Get existing users BEFORE adding new user (for mesh topology)
-      const existingUsers = Array.from(room.participants.values()).map(p => ({
-        socketId: p.socketId,
-        userId: p.userId,
-        userName: p.userName,
-      }));
-
-      // Store socket-to-user mapping
-      socketToUser.set(socket.id, {
-        userId: socket.userId!,
-        userName: socket.userName!,
-      });
-
-      // Store socket-to-room mapping
-      socketToRoom.set(socket.id, roomId);
-
-      // Add new user to room
-      socket.roomId = roomId;
-      socket.join(roomId);
       room.participants.set(socket.id, {
         userId: socket.userId!,
         userName: socket.userName!,
@@ -172,6 +127,7 @@ export const setupSocketHandlers = (io: Server) => {
         room.callId = callSession._id.toString();
         
         // CRITICAL: Upsert participant record to prevent duplicates
+        // Use findOneAndUpdate with upsert to ensure unique (callId, userId) constraint
         await CallParticipant.findOneAndUpdate(
           { callId: callSession._id, userId: socket.userId },
           {
@@ -193,11 +149,11 @@ export const setupSocketHandlers = (io: Server) => {
         );
         
         // Also update guestIds array (deduplicate to prevent duplicates)
-        const userIdStr = socket.userId!.toString();
-        const isHost = callSession.hostId.toString() === userIdStr;
+        const userId = socket.userId!.toString();
+        const isHost = callSession.hostId.toString() === userId;
         if (!isHost) {
           const guestIdStrings = callSession.guestIds.map(id => id.toString());
-          if (!guestIdStrings.includes(userIdStr)) {
+          if (!guestIdStrings.includes(userId)) {
             callSession.guestIds.push(socket.userId! as any);
             // Deduplicate guestIds array
             const uniqueGuestIds = Array.from(
@@ -210,19 +166,15 @@ export const setupSocketHandlers = (io: Server) => {
         }
       }
 
-      // Emit to ONLY the joining user: list of existing users (for mesh topology)
-      socket.emit('room:users', {
-        users: existingUsers,
-      });
-
-      // Broadcast to ALL OTHER users in room: new user joined
+      // Notify room of new participant
       socket.to(roomId).emit('user:joined', {
-        socketId: socket.id,
         userId: socket.userId,
         userName: socket.userName,
+        socketId: socket.id,
+        participantCount: room.participants.size,
       });
 
-      // Also emit legacy event for backward compatibility
+      // Send room state to joining user
       socket.emit('room:joined', {
         roomId,
         participants: Array.from(room.participants.values()),
@@ -230,7 +182,7 @@ export const setupSocketHandlers = (io: Server) => {
         callId: room.callId,
       });
 
-      console.log(`📍 User ${socket.userName} (${socket.id}) joined room ${roomId}, ${room.participants.size} users total`);
+      console.log(`📍 User ${socket.userName} joined room ${roomId}`);
 
       // Auto-start call when 2 participants
       if (room.participants.size >= 2 && !room.callStarted) {
@@ -250,47 +202,15 @@ export const setupSocketHandlers = (io: Server) => {
       }
     });
 
-    // Leave room (Explicit Leave - Multi-User Support)
-    socket.on('leave-room', async (data?: { roomId?: string }) => {
-      const roomId = data?.roomId || socket.roomId;
-      if (!roomId) {
-        socket.emit('left-room', { error: 'No room to leave' });
-        return;
-      }
-
-      // Get user info before cleanup
-      const userInfo = socketToUser.get(socket.id);
-      
-      await handleLeaveRoom(socket, io);
-      
-      // Emit confirmation to leaving user
-      socket.emit('left-room', { roomId });
-      console.log(`🚪 User ${socket.id} explicitly left room ${roomId}`);
-    });
-
-    // Backward compatibility: room:leave
+    // Leave room
     socket.on('room:leave', () => {
       handleLeaveRoom(socket, io);
     });
 
-    // WebRTC Signaling: Offer (Multi-User Mesh Topology)
-    socket.on('offer', (data: { to: string; offer: any; from?: string }) => {
-      const { to: targetSocketId, offer, from: senderSocketId } = data;
-      const actualSenderId = senderSocketId || socket.id;
-      
-      console.log(`[SIGNALING] 📤 Forwarding offer from ${actualSenderId} to ${targetSocketId}`);
-      
-      // Forward DIRECTLY to the target socket only
-      io.to(targetSocketId).emit('offer', {
-        from: actualSenderId,
-        offer,
-      });
-    });
-
-    // Backward compatibility: signal:offer
+    // WebRTC Signaling: Offer
     socket.on('signal:offer', (data: { targetId: string; offer: any }) => {
       const { targetId, offer } = data;
-      console.log('[SIGNALING] 📤 Forwarding offer (legacy):', {
+      console.log('[SIGNALING] 📤 Forwarding offer:', {
         from: socket.id,
         fromUser: socket.userName,
         to: targetId,
@@ -302,31 +222,12 @@ export const setupSocketHandlers = (io: Server) => {
         userName: socket.userName,
         offer,
       });
-      // Also emit new format for compatibility
-      io.to(targetId).emit('offer', {
-        from: socket.id,
-        offer,
-      });
     });
 
-    // WebRTC Signaling: Answer (Multi-User Mesh Topology)
-    socket.on('answer', (data: { to: string; answer: any; from?: string }) => {
-      const { to: targetSocketId, answer, from: senderSocketId } = data;
-      const actualSenderId = senderSocketId || socket.id;
-      
-      console.log(`[SIGNALING] 📥 Forwarding answer from ${actualSenderId} to ${targetSocketId}`);
-      
-      // Forward DIRECTLY to target
-      io.to(targetSocketId).emit('answer', {
-        from: actualSenderId,
-        answer,
-      });
-    });
-
-    // Backward compatibility: signal:answer
+    // WebRTC Signaling: Answer
     socket.on('signal:answer', (data: { targetId: string; answer: any }) => {
       const { targetId, answer } = data;
-      console.log('[SIGNALING] 📥 Forwarding answer (legacy):', {
+      console.log('[SIGNALING] 📥 Forwarding answer:', {
         from: socket.id,
         fromUser: socket.userName,
         to: targetId,
@@ -336,66 +237,28 @@ export const setupSocketHandlers = (io: Server) => {
         fromId: socket.id,
         answer,
       });
-      // Also emit new format for compatibility
-      io.to(targetId).emit('answer', {
-        from: socket.id,
-        answer,
-      });
     });
 
-    // WebRTC Signaling: ICE Candidate (Multi-User Mesh Topology)
-    socket.on('ice-candidate', (data: { to: string; candidate: any; from?: string }) => {
-      const { to: targetSocketId, candidate, from: senderSocketId } = data;
-      const actualSenderId = senderSocketId || socket.id;
-      
-      if (candidate) {
-        console.log(`[SIGNALING] 🧊 Forwarding ICE candidate from ${actualSenderId} to ${targetSocketId}`);
-      } else {
-        console.log(`[SIGNALING] 🧊 Forwarding null ICE candidate (end of candidates) from ${actualSenderId} to ${targetSocketId}`);
-      }
-      
-      // Forward to target (handle gracefully if target doesn't exist)
-      const targetSocket = io.sockets.sockets.get(targetSocketId);
-      if (targetSocket) {
-        io.to(targetSocketId).emit('ice-candidate', {
-          from: actualSenderId,
-          candidate,
-        });
-      } else {
-        console.warn(`[SIGNALING] ⚠️ Target socket ${targetSocketId} not found, candidate not forwarded`);
-      }
-    });
-
-    // Backward compatibility: signal:candidate
+    // WebRTC Signaling: ICE Candidate
     socket.on('signal:candidate', (data: { targetId: string; candidate: any }) => {
       const { targetId, candidate } = data;
       if (candidate) {
-        console.log('[SIGNALING] 🧊 Forwarding ICE candidate (legacy):', {
+        console.log('[SIGNALING] 🧊 Forwarding ICE candidate:', {
           from: socket.id,
           to: targetId,
           candidateType: candidate.type,
           candidateProtocol: candidate.protocol,
         });
       } else {
-        console.log('[SIGNALING] 🧊 Forwarding null ICE candidate (legacy):', {
+        console.log('[SIGNALING] 🧊 Forwarding null ICE candidate (end of candidates):', {
           from: socket.id,
           to: targetId,
         });
       }
-      const targetSocket = io.sockets.sockets.get(targetId);
-      if (targetSocket) {
-        io.to(targetId).emit('signal:candidate', {
-          fromId: socket.id,
-          candidate,
-        });
-        // Also emit new format for compatibility
-        io.to(targetId).emit('ice-candidate', {
-          from: socket.id,
-          candidate,
-        });
-      } else {
-        console.warn(`[SIGNALING] ⚠️ Target socket ${targetId} not found, candidate not forwarded`);
-      }
+      io.to(targetId).emit('signal:candidate', {
+        fromId: socket.id,
+        candidate,
+      });
     });
 
     // Audio chunk for transcription
@@ -824,91 +687,38 @@ export const setupSocketHandlers = (io: Server) => {
       });
     });
 
-    // Disconnect (Enhanced for Multi-User Cleanup)
+    // Disconnect
     socket.on('disconnect', () => {
-      // Get roomId from socketToRoom Map before cleanup
-      const roomId = socketToRoom.get(socket.id) || socket.roomId;
-      
-      // Get user info from socketToUser Map
-      const userInfo = socketToUser.get(socket.id);
-      const userId = userInfo?.userId || socket.userId;
-      const userName = userInfo?.userName || socket.userName;
-
       // Update online status
-      if (userId && !userId.startsWith('anon-')) {
-        const userSockets = onlineUsers.get(userId);
+      if (socket.userId && !socket.userId.startsWith('anon-')) {
+        const userSockets = onlineUsers.get(socket.userId);
         if (userSockets) {
           userSockets.delete(socket.id);
           if (userSockets.size === 0) {
-            onlineUsers.delete(userId);
+            onlineUsers.delete(socket.userId);
             // Notify friends that user is offline
-            io.emit('user:offline', { userId });
+            io.emit('user:offline', { userId: socket.userId });
           }
         }
       }
-
-      // Handle room leave cleanup
-      if (roomId) {
-        const room = rooms.get(roomId);
-        if (room) {
-          // Remove user from room
-          room.participants.delete(socket.id);
-          
-          // Broadcast to remaining users
-          socket.to(roomId).emit('user-left', {
-            socketId: socket.id,
-            userId: userId,
-          });
-          
-          // Delete room if empty
-          if (room.participants.size === 0) {
-            rooms.delete(roomId);
-            console.log(`🗑️ Room ${roomId} deleted (empty)`);
-          } else {
-            console.log(`👋 User ${socket.id} left room ${roomId}, ${room.participants.size} users remaining`);
-          }
-        }
-      }
-
-      // Clean up Maps
-      socketToRoom.delete(socket.id);
-      socketToUser.delete(socket.id);
-      
-      // Legacy cleanup
       handleLeaveRoom(socket, io);
-      
-      console.log(`🔌 User disconnected: ${userId || socket.id}`);
+      console.log(`🔌 User disconnected: ${socket.userId}`);
     });
   });
 };
 
 async function handleLeaveRoom(socket: AuthenticatedSocket, io: Server) {
-  // Get roomId from socketToRoom Map or socket.roomId
-  const roomId = socketToRoom.get(socket.id) || socket.roomId;
-  if (!roomId) return;
+  if (!socket.roomId) return;
 
-  // Get user info from Maps
-  const userInfo = socketToUser.get(socket.id);
-  const userId = userInfo?.userId || socket.userId;
-  const userName = userInfo?.userName || socket.userName;
-
-  const room = rooms.get(roomId);
+  const room = rooms.get(socket.roomId);
   if (room) {
-    // Remove user from room
     room.participants.delete(socket.id);
 
-    // Broadcast to remaining users (use socket.to since socket is still connected)
-    socket.to(roomId).emit('user:left', {
-      userId: userId,
-      userName: userName,
+    socket.to(socket.roomId).emit('user:left', {
+      userId: socket.userId,
+      userName: socket.userName,
       socketId: socket.id,
       participantCount: room.participants.size,
-    });
-
-    // Also emit new event format for mesh topology
-    socket.to(roomId).emit('user-left', {
-      socketId: socket.id,
-      userId: userId,
     });
 
     // End call only if no participants left (last person left)
@@ -947,7 +757,7 @@ async function handleLeaveRoom(socket: AuthenticatedSocket, io: Server) {
           } else {
             // Fallback to basic notes if transcript is too short
             if (room.transcriptBuffer.length >= MIN_TRANSCRIPT_FOR_NOTES) {
-              await updateNotes(room, roomId, io, true);
+              await updateNotes(room, socket.roomId, io, true);
             }
           }
           
@@ -959,8 +769,8 @@ async function handleLeaveRoom(socket: AuthenticatedSocket, io: Server) {
       }
 
       // Emit call:ended only when room is empty (last person left)
-      io.to(roomId).emit('call:ended', {
-        roomId: roomId,
+      io.to(socket.roomId).emit('call:ended', {
+        roomId: socket.roomId,
         callId: room.callId,
         reason: 'last_participant_left',
       });
@@ -968,17 +778,11 @@ async function handleLeaveRoom(socket: AuthenticatedSocket, io: Server) {
 
     // Clean up empty rooms
     if (room.participants.size === 0) {
-      rooms.delete(roomId);
-      console.log(`🗑️ Room ${roomId} deleted (empty)`);
+      rooms.delete(socket.roomId);
     }
   }
 
-  // Clean up Maps
-  socketToRoom.delete(socket.id);
-  socketToUser.delete(socket.id);
-
-  // Leave Socket.IO room and clear socket.roomId
-  socket.leave(roomId);
+  socket.leave(socket.roomId);
   socket.roomId = undefined;
 }
 

@@ -44,6 +44,8 @@ const NOTES_UPDATE_INTERVAL = 30000;
 const MIN_TRANSCRIPT_FOR_NOTES = 100;
 // Image generation debounce (prevent too many generations)
 const IMAGE_GENERATION_DEBOUNCE = 30000; // 30 seconds between auto-generations
+// Maximum participants per room for mesh topology (6-8 recommended for full mesh)
+const MAX_PARTICIPANTS_PER_ROOM = 8;
 
 export const setupSocketHandlers = (io: Server) => {
   // Authentication middleware
@@ -100,7 +102,6 @@ export const setupSocketHandlers = (io: Server) => {
       }
 
       socket.roomId = roomId;
-      socket.join(roomId);
 
       // Initialize room state if needed
       if (!rooms.has(roomId)) {
@@ -115,6 +116,19 @@ export const setupSocketHandlers = (io: Server) => {
       }
 
       const room = rooms.get(roomId)!;
+
+      // Check participant limit for mesh topology
+      if (room.participants.size >= MAX_PARTICIPANTS_PER_ROOM) {
+        socket.emit('room:join:error', {
+          error: 'Room is full',
+          message: `Maximum ${MAX_PARTICIPANTS_PER_ROOM} participants allowed`,
+          maxParticipants: MAX_PARTICIPANTS_PER_ROOM,
+        });
+        console.log(`❌ User ${socket.userName} tried to join full room ${roomId} (${room.participants.size}/${MAX_PARTICIPANTS_PER_ROOM})`);
+        return;
+      }
+
+      socket.join(roomId);
       room.participants.set(socket.id, {
         userId: socket.userId!,
         userName: socket.userName!,
@@ -166,7 +180,9 @@ export const setupSocketHandlers = (io: Server) => {
         }
       }
 
-      // Notify room of new participant
+      // Notify ALL existing participants about the new user joining
+      // Each existing participant will create a new peer connection for this user
+      const existingParticipants = Array.from(room.participants.values()).filter(p => p.socketId !== socket.id);
       socket.to(roomId).emit('user:joined', {
         userId: socket.userId,
         userName: socket.userName,
@@ -174,7 +190,8 @@ export const setupSocketHandlers = (io: Server) => {
         participantCount: room.participants.size,
       });
 
-      // Send room state to joining user
+      // Send room state to joining user with all existing participants
+      // The joining user will create peer connections for each existing participant
       socket.emit('room:joined', {
         roomId,
         participants: Array.from(room.participants.values()),
@@ -182,9 +199,8 @@ export const setupSocketHandlers = (io: Server) => {
         callId: room.callId,
       });
 
-      console.log(`📍 User ${socket.userName} joined room ${roomId}`);
 
-      // Auto-start call when 2 participants
+      // Auto-start call when 2+ participants (multi-party support)
       if (room.participants.size >= 2 && !room.callStarted) {
         room.callStarted = true;
         room.callStartedAt = Date.now();
@@ -200,6 +216,8 @@ export const setupSocketHandlers = (io: Server) => {
           participants: Array.from(room.participants.values()),
         });
       }
+      
+      console.log(`📍 User ${socket.userName} joined room ${roomId} (${room.participants.size}/${MAX_PARTICIPANTS_PER_ROOM} participants)`);
     });
 
     // Leave room
@@ -714,12 +732,15 @@ async function handleLeaveRoom(socket: AuthenticatedSocket, io: Server) {
   if (room) {
     room.participants.delete(socket.id);
 
+    // Broadcast to all remaining participants so they can close their peer connections
     socket.to(socket.roomId).emit('user:left', {
       userId: socket.userId,
       userName: socket.userName,
-      socketId: socket.id,
+      socketId: socket.id, // CRITICAL: Include socketId so frontend can close the specific peer connection
       participantCount: room.participants.size,
     });
+    
+    console.log(`👋 User ${socket.userName} (${socket.id}) left room ${socket.roomId} (${room.participants.size} remaining)`);
 
     // End call only if no participants left (last person left)
     if (room.participants.size === 0 && room.callStarted) {

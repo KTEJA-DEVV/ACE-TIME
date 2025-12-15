@@ -69,6 +69,7 @@ export default function CallRoom() {
   const {
     localStream,
     remoteStream,
+    remoteStreams,
     callStatus,
     participants,
     transcript,
@@ -572,7 +573,7 @@ export default function CallRoom() {
     }
   }, [remoteStream]);
   
-  // Update participant streams when remote stream or participants change
+  // Update participant streams when remote streams or participants change
   useEffect(() => {
     setParticipantStreams(prev => {
       const updated = new Map(prev);
@@ -588,39 +589,47 @@ export default function CallRoom() {
         });
       }
       
-      // Track remote participants' streams
-      if (remoteStream && participants.length > 0) {
-        // Assign remote stream to first participant (for 1-on-1 calls)
-        // For multiple participants, each would need their own peer connection
-        const firstParticipant = participants[0];
-        // Only update if we don't already have a stream for this participant
-        if (!updated.has(firstParticipant.socketId) || !updated.get(firstParticipant.socketId)?.stream) {
-          updated.set(firstParticipant.socketId, {
-            stream: remoteStream,
-            isVideoOff: false, // Will be updated via socket events
-            isMuted: false, // Will be updated via socket events
-            userName: firstParticipant.userName,
-            userId: firstParticipant.userId,
-          });
-        }
-      }
-      
-      // Initialize participant entries for all participants (even without streams yet)
+      // Track remote participants' streams from remoteStreams Map
       participants.forEach(participant => {
-        if (!updated.has(participant.socketId)) {
+        const participantStream = remoteStreams.get(participant.socketId);
+        
+        if (participantStream) {
+          // Detect actual track state from MediaStreamTrack
+          const videoTracks = participantStream.getVideoTracks();
+          const audioTracks = participantStream.getAudioTracks();
+          
+          // Video is off if no video track OR track exists but is disabled/muted
+          const isVideoOff = videoTracks.length === 0 || 
+            (videoTracks.length > 0 && (!videoTracks[0].enabled || videoTracks[0].muted));
+          
+          // Audio is muted if no audio track OR track exists but is disabled/muted
+          const isMuted = audioTracks.length === 0 || 
+            (audioTracks.length > 0 && (!audioTracks[0].enabled || audioTracks[0].muted));
+          
           updated.set(participant.socketId, {
-            stream: null,
-            isVideoOff: false,
-            isMuted: false,
+            stream: participantStream,
+            isVideoOff,
+            isMuted,
             userName: participant.userName,
             userId: participant.userId,
           });
+        } else {
+          // No stream yet - check if we have existing entry, otherwise initialize
+          if (!updated.has(participant.socketId)) {
+            updated.set(participant.socketId, {
+              stream: null,
+              isVideoOff: false, // Default to video on until we know otherwise
+              isMuted: false, // Default to unmuted until we know otherwise
+              userName: participant.userName,
+              userId: participant.userId,
+            });
+          }
         }
       });
       
       return updated;
     });
-  }, [remoteStream, participants, localStream, user, isVideoOff, isMuted]);
+  }, [remoteStreams, participants, localStream, user, isVideoOff, isMuted]);
 
   // Listen for participant video/audio state changes
   useEffect(() => {
@@ -691,6 +700,76 @@ export default function CallRoom() {
       socket.off('participant:audio:changed', handleAudioChanged);
     };
   }, [callStore.socket]);
+
+  // Monitor track state changes for remote participants
+  useEffect(() => {
+    const trackStateCheckers: Map<string, () => void> = new Map();
+    const trackListeners: Map<string, Array<{ track: MediaStreamTrack; event: string; handler: () => void }>> = new Map();
+    
+    remoteStreams.forEach((stream, socketId) => {
+      const checkTrackState = () => {
+        const videoTracks = stream.getVideoTracks();
+        const audioTracks = stream.getAudioTracks();
+        
+        const isVideoOff = videoTracks.length === 0 || 
+          (videoTracks.length > 0 && (!videoTracks[0].enabled || videoTracks[0].muted));
+        
+        const isMuted = audioTracks.length === 0 || 
+          (audioTracks.length > 0 && (!audioTracks[0].enabled || audioTracks[0].muted));
+        
+        setParticipantStreams(prev => {
+          const updated = new Map(prev);
+          const existing = updated.get(socketId);
+          if (existing) {
+            // Only update if state changed
+            if (existing.isVideoOff !== isVideoOff || existing.isMuted !== isMuted) {
+              updated.set(socketId, {
+                ...existing,
+                isVideoOff,
+                isMuted,
+              });
+              return updated;
+            }
+          }
+          return prev;
+        });
+      };
+      
+      // Check immediately
+      checkTrackState();
+      
+      // Set up track event listeners
+      const listeners: Array<{ track: MediaStreamTrack; event: string; handler: () => void }> = [];
+      stream.getTracks().forEach(track => {
+        track.addEventListener('mute', checkTrackState);
+        track.addEventListener('unmute', checkTrackState);
+        track.addEventListener('ended', checkTrackState);
+        
+        listeners.push(
+          { track, event: 'mute', handler: checkTrackState },
+          { track, event: 'unmute', handler: checkTrackState },
+          { track, event: 'ended', handler: checkTrackState }
+        );
+      });
+      
+      trackStateCheckers.set(socketId, checkTrackState);
+      trackListeners.set(socketId, listeners);
+    });
+    
+    // Periodic check for enabled state changes (since there's no event for it)
+    const interval = setInterval(() => {
+      trackStateCheckers.forEach(check => check());
+    }, 500);
+    
+    return () => {
+      clearInterval(interval);
+      trackListeners.forEach((listeners) => {
+        listeners.forEach(({ track, event, handler }) => {
+          track.removeEventListener(event, handler);
+        });
+      });
+    };
+  }, [remoteStreams]);
 
   // Call duration timer - calculates from callStartTime for continuous duration
   useEffect(() => {

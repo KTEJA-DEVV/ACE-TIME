@@ -498,13 +498,13 @@ export default function VideoParticipant({
               return actuallyMuted ? (
                 <div className="bg-red-500/90 rounded-full p-1.5 animate-pulse">
                   <MicOff size={14} className="text-white" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
-                </div>
+              </div>
               ) : (
                 <div className={`rounded-full p-1.5 transition-colors duration-300 ${
                   isSpeaking ? 'bg-green-500/90 animate-pulse' : 'bg-dark-800/80'
-                }`}>
+              }`}>
                   <Mic size={14} className="text-white" style={{ display: 'inline-block', opacity: 1, visibility: 'visible' }} />
-                </div>
+              </div>
               );
             })()}
           </div>

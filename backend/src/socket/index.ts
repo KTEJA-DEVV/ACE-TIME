@@ -184,21 +184,6 @@ export const setupSocketHandlers = (io: Server) => {
 
       console.log(`📍 User ${socket.userName} joined room ${roomId}`);
 
-      // Notify all existing participants about the new user joining
-      // This allows them to create peer connections
-      const existingParticipants = Array.from(room.participants.values()).filter(
-        p => p.socketId !== socket.id
-      );
-      
-      if (existingParticipants.length > 0) {
-        socket.to(roomId).emit('user:joined', {
-          userId: socket.userId,
-          userName: socket.userName,
-          socketId: socket.id,
-          participantCount: room.participants.size,
-        });
-      }
-
       // Auto-start call when 2 participants
       if (room.participants.size >= 2 && !room.callStarted) {
         room.callStarted = true;

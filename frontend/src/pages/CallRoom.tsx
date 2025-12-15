@@ -598,13 +598,22 @@ export default function CallRoom() {
           const videoTracks = participantStream.getVideoTracks();
           const audioTracks = participantStream.getAudioTracks();
           
-          // Video is off if no video track OR track exists but is disabled/muted
-          const isVideoOff = videoTracks.length === 0 || 
-            (videoTracks.length > 0 && (!videoTracks[0].enabled || videoTracks[0].muted));
+          // Only check track state if tracks are in 'live' readyState
+          // Tracks might be in 'ended' or other states during connection establishment
+          const activeVideoTracks = videoTracks.filter(t => t.readyState === 'live');
+          const activeAudioTracks = audioTracks.filter(t => t.readyState === 'live');
           
-          // Audio is muted if no audio track OR track exists but is disabled/muted
-          const isMuted = audioTracks.length === 0 || 
-            (audioTracks.length > 0 && (!audioTracks[0].enabled || audioTracks[0].muted));
+          // Video is off if no active video track OR active track exists but is disabled/muted
+          // Default to video ON if tracks exist but aren't live yet (connection establishing)
+          const isVideoOff = activeVideoTracks.length === 0 
+            ? (videoTracks.length === 0 ? true : false) // If no tracks at all, video is off. If tracks exist but not live, assume on (connecting)
+            : (!activeVideoTracks[0].enabled || activeVideoTracks[0].muted);
+          
+          // Audio is muted if no active audio track OR active track exists but is disabled/muted
+          // Default to unmuted if tracks exist but aren't live yet (connection establishing)
+          const isMuted = activeAudioTracks.length === 0
+            ? (audioTracks.length === 0 ? true : false) // If no tracks at all, muted. If tracks exist but not live, assume unmuted (connecting)
+            : (!activeAudioTracks[0].enabled || activeAudioTracks[0].muted);
           
           updated.set(participant.socketId, {
             stream: participantStream,
@@ -615,6 +624,7 @@ export default function CallRoom() {
           });
         } else {
           // No stream yet - check if we have existing entry, otherwise initialize
+          // Default to video on and unmuted until we receive tracks and can detect actual state
           if (!updated.has(participant.socketId)) {
             updated.set(participant.socketId, {
               stream: null,
@@ -711,11 +721,26 @@ export default function CallRoom() {
         const videoTracks = stream.getVideoTracks();
         const audioTracks = stream.getAudioTracks();
         
-        const isVideoOff = videoTracks.length === 0 || 
-          (videoTracks.length > 0 && (!videoTracks[0].enabled || videoTracks[0].muted));
+        // Only check tracks that are in 'live' readyState
+        // Tracks in other states (connecting, ended) should not affect the UI state
+        const activeVideoTracks = videoTracks.filter(t => t.readyState === 'live');
+        const activeAudioTracks = audioTracks.filter(t => t.readyState === 'live');
         
-        const isMuted = audioTracks.length === 0 || 
-          (audioTracks.length > 0 && (!audioTracks[0].enabled || audioTracks[0].muted));
+        // Video is off only if:
+        // 1. No video tracks at all, OR
+        // 2. Active video track exists but is disabled or muted
+        // If tracks exist but aren't live yet, assume video is ON (connection establishing)
+        const isVideoOff = activeVideoTracks.length === 0
+          ? (videoTracks.length === 0 ? true : false) // No tracks = off, tracks exist but not live = assume on
+          : (!activeVideoTracks[0].enabled || activeVideoTracks[0].muted);
+        
+        // Audio is muted only if:
+        // 1. No audio tracks at all, OR
+        // 2. Active audio track exists but is disabled or muted
+        // If tracks exist but aren't live yet, assume unmuted (connection establishing)
+        const isMuted = activeAudioTracks.length === 0
+          ? (audioTracks.length === 0 ? true : false) // No tracks = muted, tracks exist but not live = assume unmuted
+          : (!activeAudioTracks[0].enabled || activeAudioTracks[0].muted);
         
         setParticipantStreams(prev => {
           const updated = new Map(prev);
@@ -723,6 +748,16 @@ export default function CallRoom() {
           if (existing) {
             // Only update if state changed
             if (existing.isVideoOff !== isVideoOff || existing.isMuted !== isMuted) {
+              console.log('[TRACK STATE] Updating participant state:', {
+                socketId,
+                userName: existing.userName,
+                isVideoOff,
+                isMuted,
+                videoTracksCount: videoTracks.length,
+                activeVideoTracksCount: activeVideoTracks.length,
+                audioTracksCount: audioTracks.length,
+                activeAudioTracksCount: activeAudioTracks.length,
+              });
               updated.set(socketId, {
                 ...existing,
                 isVideoOff,

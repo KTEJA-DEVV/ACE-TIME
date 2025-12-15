@@ -327,6 +327,24 @@ export const useCallStore = create<CallState>((set, get) => ({
         participants: filteredParticipants,
         callStatus: data.callStarted ? 'active' : 'waiting',
       });
+      
+      // Create peer connections for all existing participants
+      const { localStream } = get();
+      if (localStream && filteredParticipants.length > 0) {
+        console.log('[WEBRTC] 🚀 Creating peer connections for existing participants...');
+        // Use setTimeout to ensure state is updated before creating connections
+        setTimeout(async () => {
+          for (const participant of filteredParticipants) {
+            try {
+              await get().createPeerConnection(participant.socketId, participant.userId, participant.userName);
+              // Small delay between connections to avoid overwhelming the system
+              await new Promise(resolve => setTimeout(resolve, 100));
+            } catch (error: any) {
+              console.error('[WEBRTC] ❌ Error creating peer connection for:', participant.socketId, error.message);
+            }
+          }
+        }, 500); // Wait 500ms for state to settle
+      }
     });
 
     socket.on('user:joined', async (data) => {
@@ -407,43 +425,51 @@ export const useCallStore = create<CallState>((set, get) => ({
       }
     });
 
-    socket.on('user:left', (data) => {
-      console.log('[CALL] User left:', data.userName, 'Remaining participants:', data.participantCount);
-      set((state) => {
-        const updatedParticipants = state.participants.filter(p => p.socketId !== data.socketId);
-        console.log('[CALL] Updated participants count:', updatedParticipants.length);
-        return {
-          participants: updatedParticipants,
-        };
-      });
-      
-      // Keep call active - don't change call status
-      // Call only ends when call:ended event is received (last participant left)
-      const { callStatus } = get();
-      if (callStatus === 'active') {
-        console.log('[CALL] Call continues with remaining participants');
-      }
-    });
-
     socket.on('signal:offer', async (data) => {
-      const { peerConnection, localStream } = get();
-      if (!peerConnection) {
-        console.error('[WEBRTC] ❌ Cannot handle offer - no peer connection');
+      const { peerConnections, localStream } = get();
+      const fromSocketId = data.fromId;
+      
+      // Get or create peer connection for this specific participant
+      let pc = peerConnections.get(fromSocketId);
+      
+      // If peer connection doesn't exist, create it
+      if (!pc) {
+        console.log('[WEBRTC] ⚠️ No peer connection found for offer from:', fromSocketId, '- Creating new one');
+        // We need participant info to create connection - try to find it from participants list
+        const { participants } = get();
+        const participant = participants.find(p => p.socketId === fromSocketId);
+        if (participant && localStream) {
+          await get().createPeerConnection(fromSocketId, participant.userId, participant.userName);
+          // Refresh peerConnections after creation
+          const updatedPeerConnections = get().peerConnections;
+          pc = updatedPeerConnections.get(fromSocketId);
+        } else {
+          console.error('[WEBRTC] ❌ Cannot create peer connection - missing participant info or local stream');
+          return;
+        }
+      }
+      
+      // Final check - if still no peer connection, abort
+      if (!pc) {
+        console.error('[WEBRTC] ❌ Cannot handle offer - no peer connection for:', fromSocketId);
         return;
       }
       
+      // TypeScript now knows pc is defined
+      const peerConn = pc;
+      
       try {
         console.log('[WEBRTC] 📥 ========== RECEIVED OFFER ==========');
-        console.log('[WEBRTC] 📥 Offer from:', data.fromId);
+        console.log('[WEBRTC] 📥 Offer from:', fromSocketId);
         console.log('[WEBRTC] 📥 Offer details:', {
           type: data.offer?.type,
           sdp: data.offer?.sdp?.substring(0, 200) + '...',
         });
-        console.log('[WEBRTC] 📥 Current signaling state:', peerConnection.signalingState);
+        console.log('[WEBRTC] 📥 Current signaling state:', peerConn.signalingState);
         
         // CRITICAL: Ensure tracks are added BEFORE setting remote description
         if (localStream) {
-          const senders = peerConnection.getSenders();
+          const senders = peerConn.getSenders();
           const hasVideoSender = senders.some(s => s.track && s.track.kind === 'video');
           const hasAudioSender = senders.some(s => s.track && s.track.kind === 'audio');
           
@@ -460,7 +486,7 @@ export const useCallStore = create<CallState>((set, get) => ({
               if (!existingSender) {
                 console.log('[WEBRTC] ➕ Adding track:', track.kind, track.id);
                 try {
-                  peerConnection.addTrack(track, localStream);
+                  peerConn.addTrack(track, localStream);
                   console.log('[WEBRTC] ✅ Track added successfully');
                 } catch (error: any) {
                   console.error('[WEBRTC] ❌ Error adding track:', error.message);
@@ -476,12 +502,12 @@ export const useCallStore = create<CallState>((set, get) => ({
         
         // CRITICAL: Set remote description first
         console.log('[WEBRTC] 🔧 Setting remote description...');
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
-        console.log('[WEBRTC] ✅ Remote description set, signaling state:', peerConnection.signalingState);
+        await peerConn.setRemoteDescription(new RTCSessionDescription(data.offer));
+        console.log('[WEBRTC] ✅ Remote description set, signaling state:', peerConn.signalingState);
         
         // CRITICAL: Create answer with proper options
         console.log('[WEBRTC] 🔧 Creating answer...');
-        const answer = await peerConnection.createAnswer({
+        const answer = await peerConn.createAnswer({
           offerToReceiveAudio: true,
           offerToReceiveVideo: true,
         });
@@ -492,15 +518,15 @@ export const useCallStore = create<CallState>((set, get) => ({
         });
         
         // CRITICAL: Set local description
-        await peerConnection.setLocalDescription(answer);
-        console.log('[WEBRTC] ✅ Local description set, signaling state:', peerConnection.signalingState);
+        await peerConn.setLocalDescription(answer);
+        console.log('[WEBRTC] ✅ Local description set, signaling state:', peerConn.signalingState);
         
         // CRITICAL: Send answer
         socket.emit('signal:answer', {
-          targetId: data.fromId,
-          answer: peerConnection.localDescription,
+          targetId: fromSocketId,
+          answer: peerConn.localDescription,
         });
-        console.log('[WEBRTC] 📡 Answer sent via Socket.IO to:', data.fromId);
+        console.log('[WEBRTC] 📡 Answer sent via Socket.IO to:', fromSocketId);
         console.log('[WEBRTC] 📥 ========== OFFER HANDLED ==========');
       } catch (error: any) {
         console.error('[WEBRTC] ❌ Error handling offer:', error.message, error);
@@ -1106,6 +1132,30 @@ export const useCallStore = create<CallState>((set, get) => ({
             readyState: event.track.readyState,
           });
         }
+        
+        // CRITICAL: Wait for track to become 'live' before checking state
+        // Tracks might be in 'connecting' state initially, and we shouldn't mark them as off/muted
+        const checkWhenLive = () => {
+          if (event.track.readyState === 'live') {
+            console.log('[WEBRTC] ✅ Track is now live:', {
+              socketId,
+              trackKind: event.track.kind,
+              enabled: event.track.enabled,
+              muted: event.track.muted,
+            });
+            // Trigger state update by updating remoteStreams
+            const { remoteStreams: currentStreams } = get();
+            set({ remoteStreams: new Map(currentStreams) });
+          } else if (event.track.readyState !== 'ended') {
+            // Track is still connecting, check again soon
+            setTimeout(checkWhenLive, 100);
+          }
+        };
+        
+        // Start checking when track becomes live
+        if (event.track.readyState !== 'live') {
+          setTimeout(checkWhenLive, 100);
+        }
       }
       
       set({ remoteStreams: new Map(remoteStreams) });
@@ -1177,7 +1227,7 @@ export const useCallStore = create<CallState>((set, get) => ({
   },
 
   leaveRoom: async () => {
-    const { socket, roomId, localStream, peerConnection } = get();
+    const { socket, roomId, localStream, peerConnection, peerConnections } = get();
     
     console.log('[LEAVE] Leaving room:', roomId);
     
@@ -1200,10 +1250,24 @@ export const useCallStore = create<CallState>((set, get) => ({
       });
     }
     
-    // Close peer connection
+    // Close all peer connections (for multi-participant calls)
+    peerConnections.forEach((pc, socketId) => {
+      try {
+        pc.close();
+        console.log('[LEAVE] Closed peer connection for:', socketId);
+      } catch (error: any) {
+        console.error('[LEAVE] Error closing peer connection:', error.message);
+      }
+    });
+    
+    // Close legacy peer connection (for backward compatibility)
     if (peerConnection) {
-      peerConnection.close();
-      console.log('[LEAVE] Closed peer connection');
+      try {
+        peerConnection.close();
+        console.log('[LEAVE] Closed legacy peer connection');
+      } catch (error: any) {
+        console.error('[LEAVE] Error closing legacy peer connection:', error.message);
+      }
     }
     
     // Don't disconnect socket - let it stay connected for reconnection
@@ -1212,8 +1276,10 @@ export const useCallStore = create<CallState>((set, get) => ({
     // Reset call state but keep socket for potential reconnection
     set({
       peerConnection: null,
+      peerConnections: new Map(),
       localStream: null,
       remoteStream: null,
+      remoteStreams: new Map(),
       roomId: null,
       callId: null,
       isHost: false,
@@ -1232,7 +1298,7 @@ export const useCallStore = create<CallState>((set, get) => ({
   },
 
   endCall: async () => {
-    const { socket, localStream, peerConnection, roomId } = get();
+    const { socket, localStream, peerConnection, peerConnections, roomId } = get();
     
     console.log('[CALL] User leaving call, but call continues for others');
     
@@ -1249,9 +1315,24 @@ export const useCallStore = create<CallState>((set, get) => ({
       });
     }
     
-    // Close peer connection for this user
+    // Close all peer connections (for multi-participant calls)
+    peerConnections.forEach((pc, socketId) => {
+      try {
+        pc.close();
+        console.log('[CALL] Closed peer connection for:', socketId);
+      } catch (error: any) {
+        console.error('[CALL] Error closing peer connection:', error.message);
+      }
+    });
+    
+    // Close legacy peer connection (for backward compatibility)
     if (peerConnection) {
-      peerConnection.close();
+      try {
+        peerConnection.close();
+        console.log('[CALL] Closed legacy peer connection');
+      } catch (error: any) {
+        console.error('[CALL] Error closing legacy peer connection:', error.message);
+      }
     }
     
     // Emit call:end to remove this user from the call
@@ -1272,6 +1353,8 @@ export const useCallStore = create<CallState>((set, get) => ({
       localStream: null,
       remoteStream: null,
       peerConnection: null,
+      peerConnections: new Map(),
+      remoteStreams: new Map(),
       participants: [], // Clear participants list for this user
     });
   },
@@ -2102,7 +2185,7 @@ export const useCallStore = create<CallState>((set, get) => ({
     await get().stopCallRecording();
     
     // Make sure to stop any remaining tracks
-    const { localStream, peerConnection, socket } = get();
+    const { localStream, peerConnection, peerConnections, socket } = get();
     
     if (localStream) {
       localStream.getTracks().forEach(track => {
@@ -2110,8 +2193,24 @@ export const useCallStore = create<CallState>((set, get) => ({
       });
     }
     
+    // Close all peer connections (for multi-participant calls)
+    peerConnections.forEach((pc, socketId) => {
+      try {
+        pc.close();
+        console.log('[CLEAR] Closed peer connection for:', socketId);
+      } catch (error: any) {
+        console.error('[CLEAR] Error closing peer connection:', error.message);
+      }
+    });
+    
+    // Close legacy peer connection (for backward compatibility)
     if (peerConnection) {
-      peerConnection.close();
+      try {
+        peerConnection.close();
+        console.log('[CLEAR] Closed legacy peer connection');
+      } catch (error: any) {
+        console.error('[CLEAR] Error closing legacy peer connection:', error.message);
+      }
     }
     
     if (socket) {
@@ -2121,8 +2220,10 @@ export const useCallStore = create<CallState>((set, get) => ({
     set({
       socket: null,
       peerConnection: null,
+      peerConnections: new Map(),
       localStream: null,
       remoteStream: null,
+      remoteStreams: new Map(),
       speechRecognition: null,
       callRecorder: null,
       recordingChunks: [],

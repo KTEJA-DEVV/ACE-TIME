@@ -66,6 +66,7 @@ interface CallState {
   socket: Socket | null;
   peerConnection: RTCPeerConnection | null; // Keep for backward compatibility (1-on-1 calls)
   peerConnections: Map<string, RTCPeerConnection>; // Map of socketId -> peer connection (for multiple participants)
+  pendingIceCandidates: Map<string, RTCIceCandidate[]>; // Queue ICE candidates until remote description is set
   localStream: MediaStream | null;
   remoteStream: MediaStream | null; // Keep for backward compatibility (1-on-1 calls)
   remoteStreams: Map<string, MediaStream>; // Map of socketId -> remote stream (for multiple participants)
@@ -130,6 +131,7 @@ export const useCallStore = create<CallState>((set, get) => ({
   socket: null,
   peerConnection: null,
   peerConnections: new Map<string, RTCPeerConnection>(),
+  pendingIceCandidates: new Map<string, RTCIceCandidate[]>(),
   localStream: null,
   remoteStream: null,
   remoteStreams: new Map<string, MediaStream>(),
@@ -377,154 +379,48 @@ export const useCallStore = create<CallState>((set, get) => ({
         };
       });
       
-      // Note: Peer connections are created when we receive offers from other participants
-      // This ensures we only create connections when needed
+      // CRITICAL: Create peer connection for this new participant
+      // For multi-user calls, ALL existing participants create peer connections and offers for new joiners
+      // This ensures proper peer-to-peer mesh connectivity
+      const { peerConnections, localStream } = get();
       
-      const { peerConnection, localStream } = get();
-      console.log('[WEBRTC] 🔍 Checking peer connection and local stream:', {
-        hasPeerConnection: !!peerConnection,
-        hasLocalStream: !!localStream,
-        peerConnectionState: peerConnection ? {
-          connectionState: peerConnection.connectionState,
-          iceConnectionState: peerConnection.iceConnectionState,
-          signalingState: peerConnection.signalingState,
-        } : null,
-      });
-      
-      if (peerConnection && localStream) {
+      // Create a new peer connection for this participant if it doesn't exist
+      if (localStream && !peerConnections.has(data.socketId)) {
+        console.log('[WEBRTC] 🔗 Creating peer connection for new participant:', data.socketId);
+        const pc = new RTCPeerConnection(ICE_SERVERS);
+        
+        // CRITICAL: Set up event handlers FIRST (including ontrack)
+        // This ensures we can receive remote tracks when they arrive
+        setupPeerConnectionForParticipant(pc, data.socketId, socket, localStream);
+        
+        // Store the peer connection
+        peerConnections.set(data.socketId, pc);
+        set({ peerConnections: new Map(peerConnections) });
+        
+        // CRITICAL: Create and send offer AFTER handlers are set up
         try {
-          // CRITICAL: Verify tracks are added before creating offer
-          const senders = peerConnection.getSenders();
-          const hasVideoSender = senders.some(s => s.track && s.track.kind === 'video');
-          const hasAudioSender = senders.some(s => s.track && s.track.kind === 'audio');
-          
-          console.log('[WEBRTC] 📊 ========== PEER CONNECTION SENDERS CHECK ==========');
-          console.log('[WEBRTC] 📊 Sender details:', {
-            totalSenders: senders.length,
-            hasVideoSender,
-            hasAudioSender,
-            senders: senders.map(s => ({
-              kind: s.track?.kind,
-              enabled: s.track?.enabled,
-              id: s.track?.id,
-              readyState: s.track?.readyState,
-            })),
+          console.log('[WEBRTC] 🎯 Creating offer for new participant:', data.socketId);
+          const offer = await pc.createOffer({
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: true,
           });
           
-          // CRITICAL: If tracks are missing, add them now
-          if (!hasVideoSender || !hasAudioSender) {
-            console.warn('[WEBRTC] ⚠️ Missing tracks in peer connection, adding now...');
-            localStream.getTracks().forEach(track => {
-              const existingSender = senders.find(s => s.track && s.track.id === track.id);
-              if (!existingSender) {
-                console.log('[WEBRTC] ➕ Adding missing track:', {
-                  kind: track.kind,
-                  id: track.id,
-                  enabled: track.enabled,
-                  readyState: track.readyState,
-                });
-                try {
-                  const sender = peerConnection.addTrack(track, localStream);
-                  console.log('[WEBRTC] ✅ Track added successfully:', {
-                    kind: track.kind,
-                    senderCreated: !!sender,
-                  });
-                } catch (error: any) {
-                  console.error('[WEBRTC] ❌ Error adding track:', {
-                    kind: track.kind,
-                    error: error.message,
-                  });
-                }
-              } else {
-                console.log('[WEBRTC] ℹ️ Track already added:', track.kind, track.id);
-              }
-            });
-            
-            // Re-check senders after adding
-            const updatedSenders = peerConnection.getSenders();
-            console.log('[WEBRTC] 📊 Updated senders after adding tracks:', {
-              totalSenders: updatedSenders.length,
-              senders: updatedSenders.map(s => ({
-                kind: s.track?.kind,
-                enabled: s.track?.enabled,
-              })),
-            });
-          }
+          await pc.setLocalDescription(offer);
           
-          // Both host and non-host can create offers for 1-on-1 calls
-          // For group calls, only host creates offers
-          const isHost = get().isHost;
-          const participantCount = get().participants.length;
+          socket.emit('signal:offer', {
+            targetId: data.socketId,
+            offer: pc.localDescription,
+          });
           
-          // Create offer if host OR if it's a 1-on-1 call (participantCount === 1 means this is the second person)
-          if (isHost || participantCount === 1) {
-            console.log('[WEBRTC] 🎯 ========== CREATING OFFER ==========');
-            console.log('[WEBRTC] 🎯 Offer details:', {
-              socketId: data.socketId,
-              userName: data.userName,
-              isHost,
-              participantCount,
-            });
-            console.log('[WEBRTC] 📋 Local stream tracks before offer:', {
-              videoTracks: localStream.getVideoTracks().length,
-              audioTracks: localStream.getAudioTracks().length,
-              videoEnabled: localStream.getVideoTracks()[0]?.enabled,
-              audioEnabled: localStream.getAudioTracks()[0]?.enabled,
-              videoTrackId: localStream.getVideoTracks()[0]?.id,
-              audioTrackId: localStream.getAudioTracks()[0]?.id,
-            });
-            
-            const offer = await peerConnection.createOffer({
-              offerToReceiveAudio: true,
-              offerToReceiveVideo: true,
-            });
-            
-            console.log('[WEBRTC] 📤 Offer created:', {
-              type: offer.type,
-              sdpLength: offer.sdp?.length || 0,
-              sdpPreview: offer.sdp?.substring(0, 300) + '...',
-              hasVideo: offer.sdp?.includes('m=video'),
-              hasAudio: offer.sdp?.includes('m=audio'),
-            });
-            
-            await peerConnection.setLocalDescription(offer);
-            console.log('[WEBRTC] ✅ Local description set:', {
-              signalingState: peerConnection.signalingState,
-              localDescriptionType: peerConnection.localDescription?.type,
-            });
-            
-            socket.emit('signal:offer', {
-              targetId: data.socketId,
-              offer: peerConnection.localDescription,
-            });
-            console.log('[WEBRTC] 📡 ========== OFFER SENT ==========');
-            console.log('[WEBRTC] 📡 Sent to:', data.socketId, data.userName);
-            
-            // Send any queued ICE candidates immediately
-            // Note: ICE candidates are sent automatically by onicecandidate handler
-            // But we should also send any that were queued before this participant joined
-          } else {
-            console.log('[WEBRTC] ⏸️ Not creating offer (not host and not 1-on-1):', {
-              isHost,
-              participantCount,
-            });
-          }
+          console.log('[WEBRTC] 📡 Offer sent to new participant:', data.socketId, data.userName);
         } catch (error: any) {
-          console.error('[WEBRTC] ❌ ========== ERROR CREATING OFFER ==========');
-          console.error('[WEBRTC] ❌ Error details:', {
-            message: error.message,
-            stack: error.stack,
-            name: error.name,
-          });
+          console.error('[WEBRTC] ❌ Error creating offer for participant:', error.message);
           toast.error('Connection Error', 'Failed to establish video connection');
         }
+      } else if (peerConnections.has(data.socketId)) {
+        console.log('[WEBRTC] ℹ️ Peer connection already exists for participant:', data.socketId);
       } else {
-        console.error('[WEBRTC] ❌ ========== CANNOT CREATE OFFER ==========');
-        console.error('[WEBRTC] ❌ Missing requirements:', {
-          hasPeerConnection: !!peerConnection,
-          hasLocalStream: !!localStream,
-          peerConnectionState: peerConnection ? peerConnection.signalingState : 'N/A',
-        });
+        console.warn('[WEBRTC] ⚠️ Cannot create peer connection - no local stream');
       }
     });
 
@@ -571,81 +467,59 @@ export const useCallStore = create<CallState>((set, get) => ({
     });
 
     socket.on('signal:offer', async (data) => {
-      const { peerConnections, localStream } = get();
-      
-      // Get or create peer connection for this specific participant
-      let pc = peerConnections.get(data.fromId);
-      if (!pc) {
-        console.log('[WEBRTC] 🔗 Creating new peer connection for participant:', data.fromId);
-        pc = new RTCPeerConnection(ICE_SERVERS);
-        
-        // Set up event handlers for this peer connection
-        setupPeerConnectionForParticipant(pc, data.fromId, socket);
-        
-        peerConnections.set(data.fromId, pc);
-        set({ peerConnections: new Map(peerConnections) });
-      }
+      const { peerConnections, localStream, pendingIceCandidates } = get();
       
       if (!localStream) {
         console.error('[WEBRTC] ❌ Cannot handle offer - no local stream');
         return;
       }
       
+      // CRITICAL: Create peer connection FIRST if it doesn't exist
+      // This ensures event handlers are set up before any signaling
+      let pc = peerConnections.get(data.fromId);
+      if (!pc) {
+        console.log('[WEBRTC] 🔗 Creating new peer connection for participant:', data.fromId);
+        pc = new RTCPeerConnection(ICE_SERVERS);
+        
+        // CRITICAL: Set up event handlers BEFORE any signaling
+        // This ensures ontrack handler is ready when remote tracks arrive
+        setupPeerConnectionForParticipant(pc, data.fromId, socket, localStream);
+        
+        peerConnections.set(data.fromId, pc);
+        set({ peerConnections: new Map(peerConnections) });
+      }
+      
       try {
         console.log('[WEBRTC] 📥 ========== RECEIVED OFFER ==========');
         console.log('[WEBRTC] 📥 Offer from:', data.fromId);
-        console.log('[WEBRTC] 📥 Offer details:', {
-          type: data.offer?.type,
-          sdp: data.offer?.sdp?.substring(0, 200) + '...',
-        });
         console.log('[WEBRTC] 📥 Current signaling state:', pc.signalingState);
         
-        // CRITICAL: Ensure tracks are added BEFORE setting remote description
-        const senders = pc.getSenders();
-        const hasVideoSender = senders.some(s => s.track && s.track.kind === 'video');
-        const hasAudioSender = senders.some(s => s.track && s.track.kind === 'audio');
-        
-        console.log('[WEBRTC] 📊 Current senders before handling offer:', {
-          totalSenders: senders.length,
-          hasVideoSender,
-          hasAudioSender,
-        });
-        
-        if (!hasVideoSender || !hasAudioSender) {
-          console.log('[WEBRTC] 🔧 Adding tracks before handling offer...');
-          localStream.getTracks().forEach(track => {
-            const existingSender = senders.find(s => s.track && s.track.id === track.id);
-            if (!existingSender) {
-              console.log('[WEBRTC] ➕ Adding track:', track.kind, track.id);
-              try {
-                if (pc) {
-                  pc.addTrack(track, localStream);
-                  console.log('[WEBRTC] ✅ Track added successfully');
-                }
-              } catch (error: any) {
-                console.error('[WEBRTC] ❌ Error adding track:', error.message);
-              }
-            } else {
-              console.log('[WEBRTC] ℹ️ Track already added:', track.kind, track.id);
-            }
-          });
-        }
-        
-        // CRITICAL: Set remote description first
+        // CRITICAL: Set remote description FIRST
         console.log('[WEBRTC] 🔧 Setting remote description...');
         await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
         console.log('[WEBRTC] ✅ Remote description set, signaling state:', pc.signalingState);
+        
+        // CRITICAL: Process any pending ICE candidates NOW that remote description is set
+        const pendingCandidates = pendingIceCandidates.get(data.fromId) || [];
+        if (pendingCandidates.length > 0) {
+          console.log('[WEBRTC] 📥 Processing', pendingCandidates.length, 'pending ICE candidates for:', data.fromId);
+          for (const candidate of pendingCandidates) {
+            try {
+              await pc.addIceCandidate(candidate);
+              console.log('[WEBRTC] ✅ Added queued ICE candidate');
+            } catch (error: any) {
+              console.warn('[WEBRTC] ⚠️ Error adding queued ICE candidate:', error.message);
+            }
+          }
+          pendingIceCandidates.delete(data.fromId);
+          set({ pendingIceCandidates: new Map(pendingIceCandidates) });
+        }
         
         // CRITICAL: Create answer with proper options
         console.log('[WEBRTC] 🔧 Creating answer...');
         const answer = await pc.createAnswer({
           offerToReceiveAudio: true,
           offerToReceiveVideo: true,
-        });
-        
-        console.log('[WEBRTC] 📤 Answer created:', {
-          type: answer.type,
-          sdp: answer.sdp?.substring(0, 200) + '...',
         });
         
         // CRITICAL: Set local description
@@ -666,8 +540,21 @@ export const useCallStore = create<CallState>((set, get) => ({
     });
     
     // Helper function to set up peer connection handlers for a specific participant
-    const setupPeerConnectionForParticipant = (pc: RTCPeerConnection, participantSocketId: string, socket: Socket) => {
+    // CRITICAL: This must be called BEFORE any signaling (offer/answer) to ensure tracks are received
+    const setupPeerConnectionForParticipant = (pc: RTCPeerConnection, participantSocketId: string, socket: Socket, localStream: MediaStream) => {
+      // CRITICAL: Add local tracks FIRST, before setting up event handlers
+      console.log('[WEBRTC] 🔧 Adding local tracks to peer connection for:', participantSocketId);
+      localStream.getTracks().forEach(track => {
+        try {
+          pc.addTrack(track, localStream);
+          console.log('[WEBRTC] ✅ Added local', track.kind, 'track to peer:', participantSocketId);
+        } catch (error: any) {
+          console.error('[WEBRTC] ❌ Error adding local track:', error.message);
+        }
+      });
+      
       // Handle incoming remote tracks for this participant
+      // CRITICAL: Set up ontrack handler BEFORE any signaling
       pc.ontrack = (event) => {
         console.log('[WEBRTC] 📹 ========== ONTRACK EVENT ==========');
         console.log('[WEBRTC] 📹 Track received from participant:', participantSocketId);
@@ -705,8 +592,19 @@ export const useCallStore = create<CallState>((set, get) => ({
             trackId: track.id,
             trackEnabled: track.enabled,
             trackMuted: track.muted,
+            trackReadyState: track.readyState,
             totalTracks: participantStream.getTracks().length,
           });
+          
+          // CRITICAL: Ensure track is enabled if it's not muted
+          // Some browsers may receive tracks in a muted state initially
+          if (track.kind === 'video' && !track.muted && track.readyState === 'live') {
+            track.enabled = true;
+            console.log('[WEBRTC] ✅ Ensured video track is enabled');
+          } else if (track.kind === 'audio' && !track.muted && track.readyState === 'live') {
+            track.enabled = true;
+            console.log('[WEBRTC] ✅ Ensured audio track is enabled');
+          }
           
           // CRITICAL: Create a new MediaStream object to trigger React re-render
           const newStream = new MediaStream(participantStream.getTracks());
@@ -715,7 +613,12 @@ export const useCallStore = create<CallState>((set, get) => ({
           // Update store with new stream
           set({ remoteStreams: new Map(remoteStreams) });
           
-          console.log('[WEBRTC] ✅ Stream updated in store for participant:', participantSocketId);
+          console.log('[WEBRTC] ✅ Stream updated in store for participant:', participantSocketId, {
+            videoTracks: newStream.getVideoTracks().length,
+            audioTracks: newStream.getAudioTracks().length,
+            videoTrackEnabled: newStream.getVideoTracks()[0]?.enabled,
+            audioTrackEnabled: newStream.getAudioTracks()[0]?.enabled,
+          });
         } else {
           console.log('[WEBRTC] ℹ️ Track already exists in stream:', track.id);
         }
@@ -817,10 +720,25 @@ export const useCallStore = create<CallState>((set, get) => ({
     });
     
     // Helper function to add ICE candidate to a peer connection
+    // CRITICAL: Queues candidates if remote description not set yet
     const addIceCandidateToPeerConnection = async (pc: RTCPeerConnection, data: any) => {
       try {
         if (data.candidate) {
           console.log('[WEBRTC] 📥 Received ICE candidate from:', data.fromId);
+          
+          // CRITICAL: Check if remote description is set
+          // If not, queue the candidate for later processing
+          if (!pc.remoteDescription) {
+            console.log('[WEBRTC] ⏳ Queuing ICE candidate (remote description not set yet)');
+            const { pendingIceCandidates } = get();
+            const pending = pendingIceCandidates.get(data.fromId) || [];
+            pending.push(new RTCIceCandidate(data.candidate));
+            pendingIceCandidates.set(data.fromId, pending);
+            set({ pendingIceCandidates: new Map(pendingIceCandidates) });
+            return;
+          }
+          
+          // Remote description is set, add candidate immediately
           await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
           console.log('[WEBRTC] ✅ ICE candidate added successfully');
         } else {
@@ -831,7 +749,13 @@ export const useCallStore = create<CallState>((set, get) => ({
         if (error.message?.includes('duplicate') || error.message?.includes('Invalid') || error.message?.includes('not in valid')) {
           console.log('[WEBRTC] ℹ️ Ignoring duplicate/invalid ICE candidate:', error.message);
         } else if (error.message?.includes('remote description')) {
-          console.warn('[WEBRTC] ⚠️ Cannot add ICE candidate - remote description not set yet');
+          // Queue candidate if remote description not set
+          console.log('[WEBRTC] ⏳ Queuing ICE candidate (remote description not set)');
+          const { pendingIceCandidates } = get();
+          const pending = pendingIceCandidates.get(data.fromId) || [];
+          pending.push(new RTCIceCandidate(data.candidate));
+          pendingIceCandidates.set(data.fromId, pending);
+          set({ pendingIceCandidates: new Map(pendingIceCandidates) });
         } else {
           console.error('[WEBRTC] ❌ Error adding ICE candidate:', {
             error: error.message,
@@ -1713,6 +1637,7 @@ export const useCallStore = create<CallState>((set, get) => ({
     set({
       peerConnection: null,
       peerConnections: new Map(),
+      pendingIceCandidates: new Map(),
       localStream: null,
       remoteStream: null,
       remoteStreams: new Map(),
@@ -2604,7 +2529,7 @@ export const useCallStore = create<CallState>((set, get) => ({
     await get().stopCallRecording();
     
     // Make sure to stop any remaining tracks
-    const { localStream, peerConnection, socket } = get();
+    const { localStream, peerConnection, peerConnections, pendingIceCandidates, socket } = get();
     
     if (localStream) {
       localStream.getTracks().forEach(track => {
@@ -2616,6 +2541,19 @@ export const useCallStore = create<CallState>((set, get) => ({
       peerConnection.close();
     }
     
+    // Close all peer connections
+    peerConnections.forEach((pc, socketId) => {
+      try {
+        pc.close();
+        console.log('[CLEAR] Closed peer connection for:', socketId);
+      } catch (error: any) {
+        console.warn('[CLEAR] Error closing peer connection:', error.message);
+      }
+    });
+    
+    // Clear pending ICE candidates
+    pendingIceCandidates.clear();
+    
     if (socket) {
       socket.disconnect();
     }
@@ -2623,8 +2561,11 @@ export const useCallStore = create<CallState>((set, get) => ({
     set({
       socket: null,
       peerConnection: null,
+      peerConnections: new Map(),
+      pendingIceCandidates: new Map(),
       localStream: null,
       remoteStream: null,
+      remoteStreams: new Map(),
       speechRecognition: null,
       callRecorder: null,
       recordingChunks: [],

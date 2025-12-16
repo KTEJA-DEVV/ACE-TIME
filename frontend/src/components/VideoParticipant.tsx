@@ -199,23 +199,50 @@ export default function VideoParticipant({
                   });
                   setIsVideoPlaying(true);
                 })
-                .catch((error) => {
-                  console.error('[VIDEO PARTICIPANT] ❌ Play error:', {
+                .catch((error: any) => {
+                  // Extract error message from different error types
+                  const errorMessage = error?.message || error?.name || String(error) || 'Unknown play error';
+                  const errorDetails = {
                     userName,
-                    error: error.message,
+                    error: errorMessage,
+                    errorName: error?.name,
+                    errorCode: error?.code,
                     retries,
-                  });
+                    videoElement: {
+                      paused: videoElement.paused,
+                      readyState: videoElement.readyState,
+                      networkState: videoElement.networkState,
+                      srcObject: !!videoElement.srcObject,
+                      muted: videoElement.muted,
+                    },
+                  };
+                  
+                  console.error('[VIDEO PARTICIPANT] ❌ Play error:', errorDetails);
+                  
+                  // Don't retry for certain errors (autoplay policy, etc.)
+                  const isAutoplayError = error?.name === 'NotAllowedError' || 
+                                        errorMessage?.toLowerCase().includes('autoplay') ||
+                                        errorMessage?.toLowerCase().includes('play() request');
+                  
+                  if (isAutoplayError) {
+                    console.warn('[VIDEO PARTICIPANT] ⚠️ Autoplay prevented - user interaction required');
+                    // Don't retry autoplay errors, they need user interaction
+                    return;
+                  }
                   
                   if (retries > 0) {
                     console.log('[VIDEO PARTICIPANT] 🔄 Retrying play, attempts left:', retries);
                     return new Promise((resolve) => {
-                  setTimeout(() => {
-                        attemptPlay(retries - 1).then(resolve).catch(resolve);
+                      setTimeout(() => {
+                        attemptPlay(retries - 1).then(resolve).catch(() => {
+                          // Silently catch retry errors to prevent unhandled promise rejection
+                          resolve();
+                        });
                       }, 200);
                     });
                   } else {
-                    console.error('[VIDEO PARTICIPANT] ❌ All play attempts failed');
-                    }
+                    console.error('[VIDEO PARTICIPANT] ❌ All play attempts failed for:', userName);
+                  }
                 });
             };
             

@@ -601,22 +601,33 @@ export default function CallRoom() {
           const videoTracks = stream.getVideoTracks();
           const audioTracks = stream.getAudioTracks();
           
-          // Check if video is actually off (no video track OR track is disabled/muted)
-          const isVideoOff = videoTracks.length === 0 || 
+          // CRITICAL: Only mark as off/muted if we have tracks AND they are explicitly disabled/muted
+          // If no tracks exist yet, assume they're on (optimistic) until tracks arrive
+          const hasVideoTrack = videoTracks.length > 0;
+          const hasAudioTrack = audioTracks.length > 0;
+          
+          // Check if video is actually off
+          // Only mark as off if we have a track AND it's explicitly disabled/muted/inactive
+          const isVideoOff = hasVideoTrack && (
                             !videoTracks[0]?.enabled || 
                             videoTracks[0]?.muted ||
-                            videoTracks[0]?.readyState !== 'live';
+                            videoTracks[0]?.readyState !== 'live'
+                          );
+          // If no video track yet, assume video is on (optimistic) - tracks may still be arriving
           
-          // Check if audio is actually muted (no audio track OR track is disabled/muted)
-          const isMuted = audioTracks.length === 0 || 
+          // Check if audio is actually muted
+          // Only mark as muted if we have a track AND it's explicitly disabled/muted/inactive
+          const isMuted = hasAudioTrack && (
                          !audioTracks[0]?.enabled || 
                          audioTracks[0]?.muted ||
-                         audioTracks[0]?.readyState !== 'live';
+                         audioTracks[0]?.readyState !== 'live'
+                       );
+          // If no audio track yet, assume audio is on (optimistic) - tracks may still be arriving
           
           updated.set(participant.socketId, {
             stream: stream,
-            isVideoOff: isVideoOff,
-            isMuted: isMuted,
+            isVideoOff: hasVideoTrack ? isVideoOff : false, // Optimistic if no track yet
+            isMuted: hasAudioTrack ? isMuted : false, // Optimistic if no track yet
             userName: participant.userName,
             userId: participant.userId,
           });
@@ -627,21 +638,34 @@ export default function CallRoom() {
             hasStream: !!stream,
             videoTracks: videoTracks.length,
             audioTracks: audioTracks.length,
-            isVideoOff,
-            isMuted,
+            hasVideoTrack,
+            hasAudioTrack,
+            isVideoOff: hasVideoTrack ? isVideoOff : false,
+            isMuted: hasAudioTrack ? isMuted : false,
             videoTrackEnabled: videoTracks[0]?.enabled,
             videoTrackMuted: videoTracks[0]?.muted,
+            videoTrackReadyState: videoTracks[0]?.readyState,
             audioTrackEnabled: audioTracks[0]?.enabled,
             audioTrackMuted: audioTracks[0]?.muted,
+            audioTrackReadyState: audioTracks[0]?.readyState,
           });
         } else if (!updated.has(participant.socketId)) {
           // Initialize participant entry even without stream yet
+          // CRITICAL: Default to video/audio ON (optimistic) until we receive tracks and can determine actual state
+          // This prevents showing "video off" for new participants before their stream arrives
           updated.set(participant.socketId, {
             stream: null,
-            isVideoOff: true, // No stream = video off
-            isMuted: true, // No stream = muted
+            isVideoOff: false, // Optimistic: assume video is on until we know otherwise
+            isMuted: false, // Optimistic: assume audio is on until we know otherwise
             userName: participant.userName,
             userId: participant.userId,
+          });
+          
+          console.log('[CALL ROOM] Initialized participant (waiting for stream):', {
+            socketId: participant.socketId,
+            userName: participant.userName,
+            isVideoOff: false, // Optimistic
+            isMuted: false, // Optimistic
           });
         }
       });

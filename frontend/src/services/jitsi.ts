@@ -29,7 +29,6 @@ export interface JitsiRoomOptions {
 
 class JitsiService {
   private api: any = null;
-  private roomName: string = '';
   private participants: Map<string, JitsiParticipant> = new Map();
   private localStream: MediaStream | null = null;
   private remoteStreams: Map<string, MediaStream> = new Map();
@@ -40,7 +39,6 @@ class JitsiService {
   private onParticipantMutedCallback?: (participant: JitsiParticipant, muted: boolean, audio: boolean) => void;
   private onConnectionFailedCallback?: (error: Error) => void;
   private onReadyToCloseCallback?: () => void;
-  private iframe: HTMLIFrameElement | null = null;
 
   /**
    * Initialize Jitsi Meet API
@@ -105,9 +103,6 @@ class JitsiService {
           email: options.userId,
         },
       });
-
-      this.roomName = options.roomName;
-      this.iframe = container.querySelector('iframe');
 
       // Set up event listeners
       this.setupEventListeners();
@@ -276,7 +271,6 @@ class JitsiService {
       this.participants.clear();
       this.remoteStreams.clear();
       this.localStream = null;
-      this.iframe = null;
     } catch (error: any) {
       console.error('[JITSI] ❌ Error leaving room:', error);
       throw error;

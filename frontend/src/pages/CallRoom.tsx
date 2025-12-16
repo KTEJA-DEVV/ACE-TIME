@@ -588,22 +588,63 @@ export default function CallRoom() {
         });
       }
       
-      // Track remote participants' streams
-      if (remoteStream && participants.length > 0) {
-        // Assign remote stream to first participant (for 1-on-1 calls)
-        // For multiple participants, each would need their own peer connection
-        const firstParticipant = participants[0];
-        // Only update if we don't already have a stream for this participant
-        if (!updated.has(firstParticipant.socketId) || !updated.get(firstParticipant.socketId)?.stream) {
-          updated.set(firstParticipant.socketId, {
-            stream: remoteStream,
-            isVideoOff: false, // Will be updated via socket events
-            isMuted: false, // Will be updated via socket events
-            userName: firstParticipant.userName,
-            userId: firstParticipant.userId,
+      // Track remote participants' streams from remoteStreams Map (multi-participant support)
+      participants.forEach(participant => {
+        // Get stream from remoteStreams Map (keyed by socketId)
+        const participantStream = callStore.remoteStreams.get(participant.socketId);
+        
+        // Fallback to remoteStream for backward compatibility (1-on-1 calls)
+        const stream = participantStream || (participants.indexOf(participant) === 0 ? remoteStream : null);
+        
+        if (stream) {
+          // CRITICAL: Read actual track states from the stream
+          const videoTracks = stream.getVideoTracks();
+          const audioTracks = stream.getAudioTracks();
+          
+          // Check if video is actually off (no video track OR track is disabled/muted)
+          const isVideoOff = videoTracks.length === 0 || 
+                            !videoTracks[0]?.enabled || 
+                            videoTracks[0]?.muted ||
+                            videoTracks[0]?.readyState !== 'live';
+          
+          // Check if audio is actually muted (no audio track OR track is disabled/muted)
+          const isMuted = audioTracks.length === 0 || 
+                         !audioTracks[0]?.enabled || 
+                         audioTracks[0]?.muted ||
+                         audioTracks[0]?.readyState !== 'live';
+          
+          updated.set(participant.socketId, {
+            stream: stream,
+            isVideoOff: isVideoOff,
+            isMuted: isMuted,
+            userName: participant.userName,
+            userId: participant.userId,
+          });
+          
+          console.log('[CALL ROOM] Participant stream state:', {
+            socketId: participant.socketId,
+            userName: participant.userName,
+            hasStream: !!stream,
+            videoTracks: videoTracks.length,
+            audioTracks: audioTracks.length,
+            isVideoOff,
+            isMuted,
+            videoTrackEnabled: videoTracks[0]?.enabled,
+            videoTrackMuted: videoTracks[0]?.muted,
+            audioTrackEnabled: audioTracks[0]?.enabled,
+            audioTrackMuted: audioTracks[0]?.muted,
+          });
+        } else if (!updated.has(participant.socketId)) {
+          // Initialize participant entry even without stream yet
+          updated.set(participant.socketId, {
+            stream: null,
+            isVideoOff: true, // No stream = video off
+            isMuted: true, // No stream = muted
+            userName: participant.userName,
+            userId: participant.userId,
           });
         }
-      }
+      });
       
       // Initialize participant entries for all participants (even without streams yet)
       participants.forEach(participant => {
